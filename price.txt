@@ -1,0 +1,20 @@
+下表所列模型价格以“百万 tokens”为单位。Token 是模型用来表示自然语言文本的的最小单位，可以是一个词、一个数字或一个标点符号等。我们将根据模型输入和输出的总 token 数进行计量计费。
+
+模型细节
+模型	deepseek-v4-flash(1)	deepseek-v4-pro
+BASE URL (OpenAI 格式)	https://api.deepseek.com
+BASE URL (Anthropic 格式)	https://api.deepseek.com/anthropic
+模型版本	DeepSeek-V4-Flash	DeepSeek-V4-Pro
+思考模式	支持非思考与思考模式（默认）
+切换方式详见思考模式
+上下文长度	1M
+输出长度	最大 384K
+功能	Json Output	支持	支持
+Tool Calls	支持	支持
+对话前缀续写（Beta）	支持	支持
+FIM 补全（Beta）	仅非思考模式支持	仅非思考模式支持
+价格	百万tokens输入（缓存命中）	0.02元	0.025元
+百万tokens输入（缓存未命中）	1元	3元
+百万tokens输出	2元	6元
+并发限制(2)	2500	500
+你好世界
