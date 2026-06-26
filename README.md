@@ -114,14 +114,6 @@ prompts/
 └── README.md
 ```
 
-## Design Documents
-
-Additional design documentation exists locally (not committed):
-
-- `多层提示词设计.md` — Multi-layer prompt architecture design
-- `记忆系统实施文档.md` — Memory system implementation document
-- `记忆训练强化.txt` — Memory training notes
-
 ## Development
 
 ```bash
