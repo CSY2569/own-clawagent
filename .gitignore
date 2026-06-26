@@ -46,3 +46,10 @@ htmlcov/
 
 # Logs
 *.log
+
+# Local docs & test dirs
+测试/
+tests/
+多层提示词设计.md
+记忆系统实施文档.md
+记忆训练强化.txt

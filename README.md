@@ -1,5 +1,7 @@
 # clawagent
 
+[English](README.md) | [中文](README.zh.md)
+
 A LangChain/LangGraph tool-calling agent powered by Anthropic Claude-compatible models (DeepSeek via Anthropic API).
 
 ## Features
@@ -110,8 +112,6 @@ prompts/
 │   ├── bootstrap.md
 │   └── agents.md
 └── README.md
-
-tests/                 # 124 tests across 7 test files
 ```
 
 ## Design Documents
@@ -137,11 +137,8 @@ uv run ruff format .
 # Type check
 uv run mypy src/ tests/
 
-# Run all tests
+# Run tests
 uv run pytest tests/ -v
-
-# Run a single test
-uv run pytest tests/test_config.py::TestPriceBook::test_get_known_model -v
 ```
 
 ## License
