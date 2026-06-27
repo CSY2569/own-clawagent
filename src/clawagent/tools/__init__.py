@@ -7,16 +7,20 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from clawagent.tools.rag_tool import configure_rag, search_documents
+
 __all__ = [
     "ALL_TOOLS",
     "_PROJECT_ROOT",
     "_resolve_path",
+    "configure_rag",
     "get_current_time",
     "greet",
     "list_sessions",
     "read_file",
     "recall_session",
     "run_command",
+    "search_documents",
     "summarize_session",
     "write_file",
 ]
@@ -127,6 +131,6 @@ def _get_memory_tools() -> list[Any]:
 
 # Registry of all tools available to the agent
 ALL_TOOLS = [
-    *[get_current_time, greet, read_file, write_file, run_command],
+    *[get_current_time, greet, read_file, write_file, run_command, search_documents],
     *_get_memory_tools(),
 ]

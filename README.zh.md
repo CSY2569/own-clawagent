@@ -6,8 +6,9 @@
 
 ## 功能特性
 
-- **工具调用 agent** — 8 个内置工具：文件读写、Shell 命令、时间查询、问候、会话记忆（列出/回顾/摘要）
-- **交互式 REPL** — Rich 驱动的仪表板，实时显示 token 用量、费用估算，支持设置热更新
+- **工具调用 agent** — 9 个内置工具：文件读写、Shell 命令、时间查询、问候、会话记忆（列出/回顾/摘要）、RAG 文档检索
+- **RAG 检索增强生成** — LLM 自行判断何时通过 `search_documents` 工具检索文档。云端嵌入（SiliconFlow）+ 本地 Chroma 向量库。支持小说的章节元数据。
+- **交互式 REPL** — Rich 驱动的仪表板，实时显示 token 用量、费用估算，支持设置热更新。`/rag-search` 可直接查询向量库。
 - **多层系统提示词** — 基于文件的提示词拼装，支持按 agent 区分身份、人格、工作区上下文和运行时元数据，工具列表自动生成
 - **对话记忆** — SQLite 持久化会话，自动生成摘要并提取用户偏好
 - **设置热更新** — 无需重启即可切换模型、调整 temperature 和最大输出 token
@@ -53,6 +54,7 @@ REPL 支持以下斜杠命令：
 | `/temp <n>` | 设置 temperature（如 `0.7`） |
 | `/max-tokens <n>` | 设置最大输出 token 数（如 `8192`） |
 | `/settings` | 显示当前配置 |
+| `/rag-search <关键词>` | 直接搜索 RAG 向量库 |
 | `/help` | 显示帮助 |
 | `quit` / `exit` / `q` | 退出 |
 
@@ -71,6 +73,10 @@ REPL 支持以下斜杠命令：
 | `CLAWAGENT_CONTEXT_WINDOW` | `1000000` | 上下文窗口大小（仅用于显示） |
 | `CLAWAGENT_MEMORY_DB` | `memories/sessions.db` | SQLite 记忆数据库路径 |
 | `CLAWAGENT_MAX_PREFERENCES` | `5` | 注入提示词的最大用户偏好数量 |
+| `SILICONFLOW_API_KEY` | *(可选)* | RAG 嵌入所需的 SiliconFlow API 密钥 |
+| `SILICONFLOW_BASE_URL` | `https://api.siliconflow.cn/v1/embeddings` | 嵌入 API 地址 |
+| `SILICONFLOW_MODEL` | `Qwen/Qwen3-VL-Embedding-8B` | 嵌入模型名称 |
+| `SILICONFLOW_DIMENSIONS` | `768` | 嵌入向量维度 |
 
 ## 多层提示词系统
 
@@ -88,6 +94,31 @@ REPL 支持以下斜杠命令：
 
 添加新 agent 只需创建 `prompts/agents/<name>/identity.md` 并设置 `CLAWAGENT_AGENT_ID=<name>`。
 
+## RAG 检索增强生成
+
+clawagent 支持 Agentic RAG — LLM 自行判断何时通过 `search_documents` 工具检索文档，而非每次对话都自动注入上下文。
+
+**架构：**
+
+- **嵌入**：云端 SiliconFlow API（`Qwen/Qwen3-VL-Embedding-8B`，768 维）
+- **向量库**：本地 Chroma（HNSW 索引，持久化至 `chroma_db/`）
+- **章节元数据**：入库时自动识别章节标记（`第X章`、`Chapter X` 等）
+
+**配置：**
+
+```bash
+# 1. 在 .env 中配置 SILICONFLOW_API_KEY
+
+# 2. 入库文档（仅需执行一次）
+uv run python -m clawagent.rag.ingest docs/ --chunk-size 512 --overlap 64
+
+# 3. 从 CLI 测试检索
+uv run clawagent
+You: /rag-search 高文的亲人
+```
+
+检索结果附带章节信息：`[1] (相关度: 0.85, 第12章) — 高文·塞西尔是...`
+
 ## 项目结构
 
 ```
@@ -99,10 +130,16 @@ src/clawagent/
 ├── ui.py              # Rich 仪表板、统计、格式化
 ├── tools/
 │   ├── __init__.py    # 核心工具（读写、shell、时间、问候）
-│   └── memory_tools.py # 记忆工具（列出/回顾/摘要会话）
-└── memory/
-    ├── summarizer.py  # 会话摘要与消息持久化
-    └── preferences.py # 用户偏好提取与查询
+│   ├── memory_tools.py # 记忆工具（列出/回顾/摘要会话）
+│   └── rag_tool.py    # RAG search_documents 工具 + CLI 查询辅助
+├── memory/
+│   ├── summarizer.py  # 会话摘要与消息持久化
+│   └── preferences.py # 用户偏好提取与查询
+└── rag/
+    ├── embedding.py   # SiliconFlow 云端嵌入客户端
+    ├── store.py       # Chroma 向量库（分批入库、章节元数据）
+    ├── chunker.py     # 固定窗口文本分块
+    └── ingest.py      # CLI 文档入库脚本
 
 prompts/
 ├── agents/pickle/     # 默认 agent 提示词文件

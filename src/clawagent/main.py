@@ -17,6 +17,7 @@ from clawagent.agent import Agent, create_agent
 from clawagent.config import PriceConfig, Settings, load_price_book
 from clawagent.memory.summarizer import load_messages
 from clawagent.tools.memory_tools import list_sessions as _list_sessions_tool
+from clawagent.tools.rag_tool import configure_rag, search_rag
 from clawagent.ui import ConversationStats, render_splash, render_status_line
 
 _SLASH_COMMANDS: list[tuple[str, str]] = [
@@ -27,6 +28,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/temp", "设置 temperature（如 0.7）"),
     ("/max-tokens", "设置最大输出 token 数（如 8192）"),
     ("/settings", "显示当前设置"),
+    ("/rag-search", "直接搜索 RAG 向量库（不经过 LLM）"),
     ("/help", "显示此帮助"),
 ]
 
@@ -57,6 +59,19 @@ def main() -> None:
 
     graph, conn = create_agent(settings)
     agent = Agent(graph, db_path=settings.memory_db_path, conn=conn)
+
+    # Initialize RAG if SILICONFLOW_API_KEY is configured
+    if settings.siliconflow_api_key:
+        from clawagent.rag import RAGStore, SiliconFlowEmbedding
+
+        embedding = SiliconFlowEmbedding(
+            api_key=settings.siliconflow_api_key,
+            model=settings.siliconflow_model,
+            dimensions=settings.siliconflow_dimensions,
+            base_url=settings.siliconflow_base_url,
+        )
+        rag_store = RAGStore(db_path="./chroma_db", embedding=embedding)
+        configure_rag(rag_store)
 
     # One-shot mode — plain output, no Rich
     if len(sys.argv) > 1:
@@ -158,6 +173,12 @@ def _handle_command(
             f"Max Tokens:  {settings.max_tokens}\n"
             f"Context:     {settings.context_window}"
         )
+    elif cmd.startswith("/rag-search "):
+        query = cmd[12:].strip()
+        if not query:
+            console.print("[yellow]用法: /rag-search <关键词>[/yellow]")
+        else:
+            _rag_search(query, console)
     elif cmd == "/help":
         console.print(
             "[bold]可用命令:[/bold]\n"
@@ -168,6 +189,7 @@ def _handle_command(
             "  /temp <n>     — 设置 temperature（如 0.7）\n"
             "  /max-tokens   — 设置最大输出 token 数（如 8192）\n"
             "  /settings     — 显示当前设置\n"
+            "  /rag-search <关键词> — 直接搜索 RAG 向量库（不经过 LLM）\n"
             "  /help         — 显示此帮助\n"
             "  quit / q      — 退出"
         )
@@ -175,6 +197,28 @@ def _handle_command(
         console.print(f"[yellow]未知命令: {cmd}。输入 /help 查看可用命令。[/yellow]")
 
     return settings, pricing
+
+
+def _rag_search(query: str, console: Console) -> None:
+    """Search the RAG vector store directly and display results."""
+    hits = search_rag(query, top_k=5)
+    if not hits:
+        console.print("[yellow]未在文档中找到相关内容。[/yellow]")
+        return
+
+    console.print(f"[bold]RAG 检索结果 — \"{query}\":[/bold]")
+    for i, h in enumerate(hits, 1):
+        score = h.get("score", "?")
+        chapter = h.get("chapter", "")
+        text = h.get("text", "")
+        meta_parts = [f"相关度: {score}"]
+        if chapter:
+            meta_parts.append(chapter)
+        label = f"[{i}] ({', '.join(meta_parts)}) — {text[:100]}"
+        if len(text) > 100:
+            label += "..."
+        console.print(label)
+    console.print()
 
 
 def _show_sessions(

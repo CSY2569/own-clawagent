@@ -30,6 +30,10 @@ class Settings:
     memory_db_path: str = "memories/sessions.db"
     max_preferences: int = 5
     agent_id: str = "pickle"
+    siliconflow_api_key: str = ""
+    siliconflow_base_url: str = "https://api.siliconflow.cn/v1/embeddings"
+    siliconflow_model: str = "Qwen/Qwen3-VL-Embedding-8B"
+    siliconflow_dimensions: int = 768
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -50,6 +54,10 @@ class Settings:
             memory_db_path=os.getenv("CLAWAGENT_MEMORY_DB", "memories/sessions.db"),
             max_preferences=int(os.getenv("CLAWAGENT_MAX_PREFERENCES", "5")),
             agent_id=os.getenv("CLAWAGENT_AGENT_ID", "pickle"),
+            siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY", ""),
+            siliconflow_base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1/embeddings"),
+            siliconflow_model=os.getenv("SILICONFLOW_MODEL", "Qwen/Qwen3-VL-Embedding-8B"),
+            siliconflow_dimensions=int(os.getenv("SILICONFLOW_DIMENSIONS", "768")),
         )
 
 
