@@ -1,5 +1,6 @@
 """Agent creation and invocation logic."""
 
+import contextlib
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -13,6 +14,12 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
 from pydantic import SecretStr
 
+# Ensure worker classes are registered before WorkerFactory is created
+import clawagent.worker.coder
+import clawagent.worker.critic
+import clawagent.worker.researcher
+import clawagent.worker.writer  # noqa: F401
+from clawagent.compression import CompressionConfig, make_state_modifier
 from clawagent.config import Settings
 from clawagent.memory.summarizer import ensure_session_entry
 from clawagent.memory.summarizer import save_messages as _save_messages
@@ -31,38 +38,71 @@ def _ensure_memory_dir(path: str) -> str:
     return str(db_path.resolve())
 
 
-def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.Connection]:
-    """Build a tool-calling ReAct agent backed by Anthropic Claude.
-
-    Returns (graph, db_connection) tuple. The caller must close the connection
-    when done.
-    """
-    model = ChatAnthropic(
+def _make_model(settings: Settings) -> ChatAnthropic:
+    """Build a ChatAnthropic model from settings."""
+    return ChatAnthropic(
         model=settings.model_name,
         api_key=SecretStr(settings.anthropic_api_key),
         max_tokens=settings.max_tokens,
         temperature=settings.temperature,
     )  # type: ignore[call-arg]
 
-    builder = PromptBuilder(
+
+def _make_sys_prompt(settings: Settings, memory_db_path: str) -> str:
+    """Build the system prompt from layered prompt files and preferences."""
+    return PromptBuilder(
         prompts_dir=_PROMPTS_DIR,
-        memory_db_path=settings.memory_db_path,
+        memory_db_path=memory_db_path,
         max_preferences=settings.max_preferences,
+    ).build(agent_id=settings.agent_id, source="cli")
+
+
+def _make_all_tools() -> list[Any]:
+    """Return all tools including delegate_task for worker delegation."""
+    from clawagent.orchestrator.delegator import delegate_task
+
+    return [*ALL_TOOLS, delegate_task]
+
+
+def _make_compression_config(settings: Settings) -> CompressionConfig:
+    """Build CompressionConfig from Settings."""
+    return CompressionConfig(
+        strategy=settings.compression_strategy,
+        max_messages=settings.compression_max_messages,
+        max_tokens=settings.compression_max_tokens,
+        keep_recent=settings.compression_keep_recent,
     )
-    sys_prompt = builder.build(agent_id=settings.agent_id, source="cli")
+
+
+def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.Connection]:
+    """Build a tool-calling ReAct agent backed by Anthropic Claude.
+
+    Returns (graph, db_connection) tuple. The caller must close the connection
+    when done.
+    """
+    model = _make_model(settings)
+    sys_prompt = _make_sys_prompt(settings, settings.memory_db_path)
 
     db_path = _ensure_memory_dir(settings.memory_db_path)
     conn = sqlite3.connect(db_path, check_same_thread=False)
-    saver = SqliteSaver(conn)
 
-    # Configure memory tools with database path and model
     _configure_memory_tools(db_path, model)
+
+    # ─── Initialize WorkerFactory ────────────────────
+    from clawagent.orchestrator.delegator import configure_worker_factory
+    from clawagent.worker.factory import WorkerFactory
+
+    factory = WorkerFactory()
+    configure_worker_factory(factory)
+
+    compression_config = _make_compression_config(settings)
 
     graph = create_react_agent(
         model=model,
-        tools=ALL_TOOLS,
-        checkpointer=saver,
+        tools=_make_all_tools(),
+        checkpointer=SqliteSaver(conn),
         prompt=sys_prompt,
+        pre_model_hook=make_state_modifier(config=compression_config, model=model),
     )
     return graph, conn
 
@@ -75,27 +115,19 @@ def rebuild_graph(
     Use this for hot-reloading model parameters (model name, temperature, max_tokens)
     without losing conversation state stored in the checkpointer.
     """
-    model = ChatAnthropic(
-        model=settings.model_name,
-        api_key=SecretStr(settings.anthropic_api_key),
-        max_tokens=settings.max_tokens,
-        temperature=settings.temperature,
-    )  # type: ignore[call-arg]
-
-    sys_prompt = PromptBuilder(
-        prompts_dir=_PROMPTS_DIR,
-        memory_db_path=db_path,
-        max_preferences=settings.max_preferences,
-    ).build(agent_id=settings.agent_id, source="cli")
-    saver = SqliteSaver(conn)
+    model = _make_model(settings)
+    sys_prompt = _make_sys_prompt(settings, db_path)
 
     _configure_memory_tools(db_path, model)
 
+    compression_config = _make_compression_config(settings)
+
     return create_react_agent(
         model=model,
-        tools=ALL_TOOLS,
-        checkpointer=saver,
+        tools=_make_all_tools(),
+        checkpointer=SqliteSaver(conn),
         prompt=sys_prompt,
+        pre_model_hook=make_state_modifier(config=compression_config, model=model),
     )
 
 
@@ -143,10 +175,7 @@ def _extract_text(content: Any) -> str:
             if isinstance(block, dict) and block.get("type") == "text":
                 parts.append(block.get("text", ""))
         return "\n".join(parts)
-    return str(content)
-
-
-_DB_PATH: str = ""  # module-level ref for Agent to save messages
+    return str(content) if content is not None else ""
 
 
 class Agent:
@@ -160,7 +189,7 @@ class Agent:
         default_thread_id: str | None = None,
     ) -> None:
         self._graph = graph
-        self._db_path = db_path or _DB_PATH
+        self._db_path = db_path
         self._conn = conn
         self._thread_id = default_thread_id or uuid4().hex[:8]
 
@@ -173,6 +202,13 @@ class Agent:
         if not self._conn:
             return
         self._graph = rebuild_graph(settings, self._db_path, self._conn)
+
+    def close(self) -> None:
+        """Release resources held by this agent, particularly the SQLite connection."""
+        if self._conn:
+            with contextlib.suppress(Exception):
+                self._conn.close()
+            self._conn = None
 
     def run(self, message: str, thread_id: str | None = None) -> AgentResponse:
         """Run the agent synchronously and return the response with usage."""
@@ -189,13 +225,14 @@ class Agent:
 
         # Save messages to conversation log and ensure session is discoverable
         if self._db_path:
-            _save_messages(self._db_path, tid, [("user", message), ("assistant", text)])
-            ensure_session_entry(self._db_path, tid, message)
+            with contextlib.suppress(Exception):
+                _save_messages(self._db_path, tid, [("user", message), ("assistant", text)])
+                ensure_session_entry(self._db_path, tid, message)
 
         return AgentResponse(text=text, usage=usage)
 
     def stream(self, message: str) -> Iterator[str]:
-        """Stream the agent's response token-by-token."""
+        """Stream the agent's response, yielding state after each node step."""
         for chunk in self._graph.stream(
             {"messages": [("user", message)]},
             config={"configurable": {"thread_id": self._thread_id}},

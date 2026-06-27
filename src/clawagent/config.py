@@ -24,6 +24,7 @@ class Settings:
 
     anthropic_api_key: str
     model_name: str = "deepseek-v4-flash"
+    model_provider: str = ""
     max_tokens: int = 4096
     temperature: float = 0.0
     context_window: int = 1_000_000
@@ -34,6 +35,10 @@ class Settings:
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1/embeddings"
     siliconflow_model: str = "Qwen/Qwen3-VL-Embedding-8B"
     siliconflow_dimensions: int = 768
+    compression_strategy: str = "trim"
+    compression_max_messages: int = 40
+    compression_max_tokens: int = 80_000
+    compression_keep_recent: int = 6
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -50,6 +55,7 @@ class Settings:
         return cls(
             anthropic_api_key=api_key,
             model_name=os.getenv("CLAWAGENT_MODEL", "deepseek-v4-flash"),
+            model_provider=os.getenv("CLAWAGENT_MODEL_PROVIDER", ""),
             context_window=context_window,
             memory_db_path=os.getenv("CLAWAGENT_MEMORY_DB", "memories/sessions.db"),
             max_preferences=int(os.getenv("CLAWAGENT_MAX_PREFERENCES", "5")),
@@ -58,6 +64,10 @@ class Settings:
             siliconflow_base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1/embeddings"),
             siliconflow_model=os.getenv("SILICONFLOW_MODEL", "Qwen/Qwen3-VL-Embedding-8B"),
             siliconflow_dimensions=int(os.getenv("SILICONFLOW_DIMENSIONS", "768")),
+            compression_strategy=os.getenv("COMPRESSION_STRATEGY", "trim"),
+            compression_max_messages=int(os.getenv("COMPRESSION_MAX_MESSAGES", "40")),
+            compression_max_tokens=int(os.getenv("COMPRESSION_MAX_TOKENS", "80000")),
+            compression_keep_recent=int(os.getenv("COMPRESSION_KEEP_RECENT", "6")),
         )
 
 
