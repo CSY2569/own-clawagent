@@ -37,7 +37,7 @@ class PromptBuilder:
     ) -> str:
         """Assemble the full system prompt from all layers."""
         if timestamp is None:
-            timestamp = datetime.now().isoformat()
+            timestamp = datetime.now().astimezone().isoformat()
 
         layers: list[str] = []
 

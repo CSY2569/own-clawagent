@@ -65,14 +65,13 @@ class RAGStore:
         if not texts:
             return
         total = len(texts)
+        if ids is None:
+            total_count = self.count()
+            ids = [f"doc_{total_count + j}" for j in range(total)]
         for batch_start in range(0, total, add_batch_size):
             batch_end = min(batch_start + add_batch_size, total)
             batch_texts = texts[batch_start:batch_end]
-            batch_ids = (
-                ids[batch_start:batch_end]
-                if ids is not None
-                else [f"doc_{self.count() + j}" for j in range(len(batch_texts))]
-            )
+            batch_ids = ids[batch_start:batch_end]
             kwargs: dict[str, Any] = {"documents": batch_texts, "ids": batch_ids}
             if metadatas is not None:
                 kwargs["metadatas"] = metadatas[batch_start:batch_end]
@@ -99,7 +98,7 @@ class RAGStore:
         distances: list[float] = (results.get("distances") or [[]])[0]
         metas_list: Sequence[Mapping[str, Any]] = (results.get("metadatas") or [[]])[0]
         for i in range(len(ids_list)):
-            score = 1.0 - distances[i] if distances and i < len(distances) else 0.0
+            score = 1.0 / (1.0 + distances[i]) if distances and i < len(distances) else 0.0
             hit: dict[str, str] = {
                 "id": ids_list[i],
                 "text": docs_list[i] if docs_list else "",
@@ -113,6 +112,32 @@ class RAGStore:
                     hit["source"] = str(meta["source"])
             hits.append(hit)
         return hits
+
+    def get_all_documents(self) -> list[dict[str, str]]:
+        """Return all documents with metadata for external indexing.
+
+        Returns:
+            List of dicts with keys: id, text, source, chapter.
+        """
+        results = self._collection.get()
+        docs: list[dict[str, str]] = []
+        ids_list: list[str] = results.get("ids") or []
+        docs_list: list[str] = results.get("documents") or []
+        metas_list: list[Any] = results.get("metadatas") or []
+        for i in range(len(ids_list)):
+            doc: dict[str, str] = {
+                "id": ids_list[i],
+                "text": docs_list[i] if i < len(docs_list) else "",
+            }
+            if i < len(metas_list):
+                meta = metas_list[i]
+                if meta:
+                    if meta.get("source"):
+                        doc["source"] = str(meta["source"])
+                    if meta.get("chapter"):
+                        doc["chapter"] = str(meta["chapter"])
+            docs.append(doc)
+        return docs
 
     def count(self) -> int:
         """Return the number of documents in the collection."""

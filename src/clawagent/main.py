@@ -4,6 +4,7 @@ import sys
 import time
 from collections.abc import Iterable
 from dataclasses import replace
+from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
@@ -17,8 +18,10 @@ from clawagent.agent import Agent, create_agent
 from clawagent.config import PriceConfig, Settings, load_price_book
 from clawagent.memory.summarizer import load_messages
 from clawagent.tools.memory_tools import list_sessions as _list_sessions_tool
-from clawagent.tools.rag_tool import configure_rag, search_rag
+from clawagent.tools.rag_tool import configure_hybrid_search, search_rag
 from clawagent.ui import ConversationStats, render_splash, render_status_line
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/sessions", "列出所有历史会话"),
@@ -27,6 +30,7 @@ _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/model", "切换模型（如 deepseek-v4-pro）"),
     ("/temp", "设置 temperature（如 0.7）"),
     ("/max-tokens", "设置最大输出 token 数（如 8192）"),
+    ("/compress", "切换压缩策略（trim / token_trim / summarize）"),
     ("/settings", "显示当前设置"),
     ("/rag-search", "直接搜索 RAG 向量库（不经过 LLM）"),
     ("/help", "显示此帮助"),
@@ -58,11 +62,11 @@ def main() -> None:
         sys.exit(1)
 
     graph, conn = create_agent(settings)
-    agent = Agent(graph, db_path=settings.memory_db_path, conn=conn)
+    agent_ref: dict[str, Agent] = {"agent": Agent(graph, db_path=settings.memory_db_path, conn=conn)}
 
     # Initialize RAG if SILICONFLOW_API_KEY is configured
     if settings.siliconflow_api_key:
-        from clawagent.rag import RAGStore, SiliconFlowEmbedding
+        from clawagent.rag import BM25Retriever, HybridSearcher, RAGStore, SiliconFlowEmbedding
 
         embedding = SiliconFlowEmbedding(
             api_key=settings.siliconflow_api_key,
@@ -70,12 +74,25 @@ def main() -> None:
             dimensions=settings.siliconflow_dimensions,
             base_url=settings.siliconflow_base_url,
         )
-        rag_store = RAGStore(db_path="./chroma_db", embedding=embedding)
-        configure_rag(rag_store)
+        rag_store = RAGStore(db_path=str(_PROJECT_ROOT / "chroma_db"), embedding=embedding)
+
+        all_docs = rag_store.get_all_documents()
+        corpus = [d["text"] for d in all_docs]
+        bm25 = BM25Retriever(corpus)
+
+        def _knn_retrieve(query: str, k: int) -> list[dict[str, str]]:
+            return rag_store.retrieve(query, top_k=k)
+
+        hybrid = HybridSearcher(
+            knn_retriever=_knn_retrieve,
+            bm25_retriever=bm25,
+            all_docs=all_docs,
+        )
+        configure_hybrid_search(hybrid)
 
     # One-shot mode — plain output, no Rich
     if len(sys.argv) > 1:
-        response = agent.run(" ".join(sys.argv[1:]))
+        response = agent_ref["agent"].run(" ".join(sys.argv[1:]))
         print(response.text)
         conn.close()
         return
@@ -110,10 +127,10 @@ def main() -> None:
 
             # Handle slash commands
             if user_input.startswith("/"):
-                settings, pricing = _handle_command(user_input, agent, settings, console, stats, pricing)
+                settings, pricing = _handle_command(user_input, agent_ref, settings, console, stats, pricing)
                 continue
 
-            response = agent.run(user_input)
+            response = agent_ref["agent"].run(user_input)
             stats.update(response.usage)
             console.print(f"\n[bold blue]Agent:[/bold blue] {response.text}")
     except (EOFError, KeyboardInterrupt):
@@ -124,7 +141,7 @@ def main() -> None:
 
 def _handle_command(
     cmd: str,
-    agent: Agent,
+    agent_ref: dict[str, Agent],
     settings: Settings,
     console: Console,
     stats: ConversationStats,
@@ -132,13 +149,14 @@ def _handle_command(
 ) -> tuple[Settings, PriceConfig]:
     """Handle slash commands in interactive mode."""
     cmd = cmd.lower()
+    agent = agent_ref["agent"]
 
     if cmd == "/sessions" or cmd == "/list":
         _show_sessions(agent, settings, console)
     elif cmd.startswith("/load "):
-        _load_session(cmd[6:].strip(), agent, settings, console, stats)
+        _load_session(cmd[6:].strip(), agent, settings, console)
     elif cmd == "/new":
-        _new_session(agent, console, stats)
+        _new_session(agent_ref, settings, console, stats)
     elif cmd.startswith("/model "):
         model_name = cmd[7:].strip()
         new_settings = replace(settings, model_name=model_name)
@@ -171,8 +189,23 @@ def _handle_command(
             f"Model:       {settings.model_name}\n"
             f"Temperature: {settings.temperature}\n"
             f"Max Tokens:  {settings.max_tokens}\n"
-            f"Context:     {settings.context_window}"
+            f"Context:     {settings.context_window}\n"
+            f"\n[bold]压缩:[/bold]\n"
+            f"Strategy:    {settings.compression_strategy}\n"
+            f"Max Msgs:    {settings.compression_max_messages}\n"
+            f"Max Tokens:  {settings.compression_max_tokens}\n"
+            f"Keep Recent: {settings.compression_keep_recent}"
         )
+    elif cmd.startswith("/compress "):
+        strategy = cmd[10:].strip()
+        valid = {"trim", "token_trim", "summarize"}
+        if strategy not in valid:
+            console.print(f"[yellow]无效策略: {strategy}。可选: {', '.join(sorted(valid))}[/yellow]")
+            return settings, pricing
+        new_settings = replace(settings, compression_strategy=strategy)
+        agent.reconfigure(new_settings)
+        console.print(f"[green]压缩策略已切换至: {strategy}[/green]")
+        return new_settings, pricing
     elif cmd.startswith("/rag-search "):
         query = cmd[12:].strip()
         if not query:
@@ -188,6 +221,7 @@ def _handle_command(
             "  /model <name> — 切换模型（如 deepseek-v4-pro）\n"
             "  /temp <n>     — 设置 temperature（如 0.7）\n"
             "  /max-tokens   — 设置最大输出 token 数（如 8192）\n"
+            "  /compress     — 切换压缩策略 (trim / token_trim / summarize)\n"
             "  /settings     — 显示当前设置\n"
             "  /rag-search <关键词> — 直接搜索 RAG 向量库（不经过 LLM）\n"
             "  /help         — 显示此帮助\n"
@@ -236,16 +270,14 @@ def _load_session(
     agent: Agent,
     settings: Settings,
     console: Console,
-    stats: ConversationStats,
 ) -> None:
     """Load a historical session and display its messages."""
-    # Switch the agent's thread_id
+    from clawagent.memory.summarizer import get_summary
 
     # Load messages from the session
     messages = load_messages(settings.memory_db_path, session_id)
     if not messages:
         # Try summary as fallback
-        from clawagent.memory.summarizer import get_summary
         summary = get_summary(settings.memory_db_path, session_id)
         if summary:
             console.print(f"[bold]会话 {session_id}:[/bold]")
@@ -266,20 +298,16 @@ def _load_session(
 
 
 def _new_session(
-    agent: Agent,
+    agent_ref: dict[str, Agent],
+    settings: Settings,
     console: Console,
     stats: ConversationStats,
 ) -> None:
-    """Create a new session."""
-    from uuid import uuid4
+    """Create a new session and switch to it immediately."""
+    old_agent = agent_ref["agent"]
+    old_agent.close()
 
-    new_id = uuid4().hex[:8]
-    # Create a new Agent instance with the new thread_id
-    from clawagent.agent import create_agent as _create_agent
-    from clawagent.config import Settings as _Settings
-
-    settings = _Settings.from_env()
-    _graph, _conn = _create_agent(settings)
-    # We can't easily swap the graph, so just log it
-    console.print(f"[bold green]已创建新会话: {new_id}[/bold green]")
-    console.print("[yellow]注意: 当前会话仍在继续，新会话将在下次启动时生效。[/yellow]")
+    graph, conn = create_agent(settings)
+    agent_ref["agent"] = Agent(graph, db_path=settings.memory_db_path, conn=conn)
+    stats.reset()
+    console.print(f"[bold green]已创建新会话: {agent_ref['agent'].thread_id}[/bold green]")

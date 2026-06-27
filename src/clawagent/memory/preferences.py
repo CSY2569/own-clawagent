@@ -126,7 +126,13 @@ def _extract_patterns_llm(text: str, model: Any) -> list[dict[str, Any]]:
     try:
         response = model.invoke([SystemMessage(content=prompt)])
         import json
-        patterns = json.loads(response.content)
+        import re
+
+        content = response.content.strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*\n?", "", content)
+            content = re.sub(r"\n?```\s*$", "", content)
+        patterns = json.loads(content)
         if isinstance(patterns, list):
             return patterns
     except Exception:

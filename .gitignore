@@ -56,6 +56,7 @@ tests/
 chroma_db/
 docs/
 实施文档/
+bug/
 
 #docs
 docs/

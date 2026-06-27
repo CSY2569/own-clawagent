@@ -46,6 +46,16 @@ class ConversationStats:
         self.latest_input_tokens = usage.input_tokens
         self.message_count += 1
 
+    def reset(self) -> None:
+        """Reset all cumulative stats for a new session."""
+        self.cumulative_input_tokens = 0
+        self.cumulative_output_tokens = 0
+        self.cumulative_cache_read_tokens = 0
+        self.cumulative_cache_creation_tokens = 0
+        self.latest_input_tokens = 0
+        self.message_count = 0
+        self.start_time = time.monotonic()
+
     @property
     def total_tokens(self) -> int:
         return self.cumulative_input_tokens + self.cumulative_output_tokens

@@ -27,7 +27,7 @@ def chunk_text(
         end = start + chunk_size
         chunk = text[start:end]
         chunks.append(chunk)
-        start = end - overlap
+        start = max(end - overlap, start + 1)
         if start >= len(text):
             break
     return chunks

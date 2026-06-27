@@ -1,19 +1,19 @@
 """Tool definitions for the clawagent."""
 
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import tool
 
-from clawagent.tools.rag_tool import configure_rag, search_documents
+from clawagent.tools.rag_tool import configure_hybrid_search, search_documents
 
 __all__ = [
     "ALL_TOOLS",
     "_PROJECT_ROOT",
     "_resolve_path",
-    "configure_rag",
+    "configure_hybrid_search",
     "get_current_time",
     "greet",
     "list_sessions",
@@ -44,7 +44,7 @@ def _resolve_path(path: str) -> Path:
 @tool
 def get_current_time() -> str:
     """Return the current system time as an ISO 8601 string."""
-    return datetime.now(tz=UTC).isoformat()
+    return datetime.now().astimezone().isoformat()
 
 
 @tool
@@ -67,12 +67,18 @@ def read_file(path: str) -> str:
     Args:
         path: File path relative to project root (e.g. "README.md", "src/clawagent/main.py").
     """
-    resolved = _resolve_path(path)
-    if not resolved.exists():
-        return f"File not found: {path}"
-    if not resolved.is_file():
-        return f"Not a file: {path}"
-    return resolved.read_text(encoding="utf-8")
+    try:
+        resolved = _resolve_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
+    try:
+        if not resolved.exists():
+            return f"File not found: {path}"
+        if not resolved.is_file():
+            return f"Not a file: {path}"
+        return resolved.read_text(encoding="utf-8")
+    except Exception as e:
+        return f"Error reading file: {e}"
 
 
 @tool
@@ -86,10 +92,16 @@ def write_file(path: str, content: str) -> str:
         path: File path relative to project root (e.g. "output/result.txt").
         content: The content to write to the file.
     """
-    resolved = _resolve_path(path)
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(content, encoding="utf-8")
-    return f"Written {len(content)} bytes to {path}"
+    try:
+        resolved = _resolve_path(path)
+    except ValueError as e:
+        return f"Error: {e}"
+    try:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(content, encoding="utf-8")
+        return f"Written {len(content)} bytes to {path}"
+    except Exception as e:
+        return f"Error writing file: {e}"
 
 
 @tool
@@ -103,14 +115,19 @@ def run_command(command: str) -> str:
     Args:
         command: Shell command to execute (e.g. "uv run ruff check .", "git status").
     """
-    result = subprocess.run(
-        command,
-        shell=True,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=str(_PROJECT_ROOT),
-    )
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(_PROJECT_ROOT),
+        )
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after 120s: {command}"
+    except Exception as e:
+        return f"Error running command: {e}"
     output = result.stdout
     if result.stderr:
         output += f"\n--- stderr ---\n{result.stderr}"
