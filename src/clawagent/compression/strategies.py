@@ -9,6 +9,19 @@ from clawagent.compression.counters import estimate_tokens
 _SUMMARY_PREFIX = "[对话历史摘要]"
 
 
+def _safe_extract_text(content: object) -> str:
+    """Extract readable text from content that may be str, list[dict], or other."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+        return "\n".join(parts)
+    return str(content) if content is not None else ""
+
+
 def trim_by_count(
     messages: list[BaseMessage],
     max_messages: int = 40,
@@ -93,8 +106,11 @@ def summarize_by_llm(
     old_summary = _extract_old_summary(messages)
 
     summary_prompt = (
+        "Summarize the following conversation in under 200 words. "
+        "Include: user identity, discussion topics, decisions made. "
+        "Respond in the same language as the conversation.\n\n"
         "以下是一段对话记录，请用 200 字以内概括关键信息："
-        "用户身份、讨论话题、已做出的决策。\n\n"
+        "用户身份、讨论话题、已做出的决策。请使用对话所用的语言回复。\n\n"
     )
     if old_summary:
         summary_prompt += f"之前的对话摘要：{old_summary}\n\n后续对话：\n"
@@ -104,7 +120,8 @@ def summarize_by_llm(
     )
 
     response = model.invoke([HumanMessage(content=summary_prompt)])
-    summary_text = response.content.strip() if hasattr(response, "content") else str(response).strip()
+    content = response.content if hasattr(response, "content") else str(response)
+    summary_text = _safe_extract_text(content).strip()
 
     summary_msg = SystemMessage(content=f"{_SUMMARY_PREFIX} {summary_text}")
     return [*system_msgs, summary_msg, *to_keep]

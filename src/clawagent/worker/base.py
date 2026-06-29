@@ -67,7 +67,7 @@ class BaseWorker(ABC):
         )
         return self._customize_prompt(base_prompt, task)
 
-    def spawn(self, task: str) -> Agent:
+    def spawn(self, task: str, settings: Settings | None = None) -> Agent:
         """Create a worker agent instance.
 
         Each call creates a fresh Agent with independent:
@@ -80,7 +80,8 @@ class BaseWorker(ABC):
         """
         from clawagent.agent import Agent
 
-        settings = Settings.from_env()
+        if settings is None:
+            settings = Settings.from_env()
 
         api_key = self.config.api_key
         if not api_key:

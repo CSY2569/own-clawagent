@@ -60,6 +60,9 @@ class PromptBuilder:
         agents_md = self._read("shared/agents.md")
         if agents_md:
             context_parts.append(agents_md)
+        search_rules = self._read("shared/search-rules.md")
+        if search_rules:
+            context_parts.append(search_rules)
         if context_parts:
             layers.append("\n\n".join(context_parts))
 
@@ -100,15 +103,16 @@ class PromptBuilder:
 
     @staticmethod
     def _build_tools_section() -> str:
-        """Auto-generate the tools listing from ALL_TOOLS.
+        """Auto-generate the tools listing from ALL_TOOLS + delegate_task.
 
         Each @tool-decorated function has .name and .description,
         so the list stays accurate as tools are added or removed.
         """
+        from clawagent.orchestrator.delegator import delegate_task
         from clawagent.tools import ALL_TOOLS  # lazy import, avoids circular deps
 
         lines = ["## Available Tools"]
-        for t in ALL_TOOLS:
+        for t in [*ALL_TOOLS, delegate_task]:
             name = getattr(t, "name", str(t))
             desc = getattr(t, "description", "")
             desc_short = desc.split("\n")[0] if desc else ""

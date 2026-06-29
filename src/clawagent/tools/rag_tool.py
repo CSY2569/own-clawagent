@@ -1,6 +1,5 @@
 """RAG retrieval tool — LLM calls search_documents when it needs document context."""
 
-import sys
 from typing import Any
 
 from langchain_core.tools import tool
@@ -37,8 +36,6 @@ def search_documents(query: str, top_k: int = 5) -> str:
     """
     if _hybrid_searcher is None:
         return "RAG 未初始化。请在 .env 中配置 SILICONFLOW_API_KEY。"
-
-    print(f"\033[2mRAG: 检索 \"{query}\" (top_k={top_k})...\033[0m", file=sys.stderr)
 
     hits = _hybrid_searcher.search(query, top_k=top_k)
     if not hits:

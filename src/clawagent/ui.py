@@ -1,26 +1,12 @@
-"""Rich-powered CLI dashboard for the clawagent interactive REPL."""
+"""CLI dashboard for the clawagent interactive REPL."""
 
 import time
 from dataclasses import dataclass
 
-from rich.columns import Columns
 from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 
 from clawagent.agent import Usage
 from clawagent.config import PriceConfig, Settings
-
-# ── ASCII art ──────────────────────────────────────────────────────────
-
-_LOGO = """\
-    ___           __
-   / _ \\___  ____/ /__ ____
-  / // / _ \\/ __/ / -_) __/
- /____/\\___/\\__/_/\\__/_/
-"""
-
 
 # ── Conversation Stats ─────────────────────────────────────────────────
 
@@ -111,50 +97,6 @@ def _format_cost(cny: float) -> str:
     return f"¥{cny:.4f}".rstrip("0").rstrip(".")
 
 
-# ── Splash screen ──────────────────────────────────────────────────────
-
-
-def render_splash(
-    settings: Settings,
-    pricing: PriceConfig,
-    console: Console,
-) -> None:
-    """Render the two-panel startup dashboard."""
-    # Left panel: logo + model info
-    info_table = Table(show_header=False, box=None, padding=(0, 1))
-    info_table.add_column("key", style="bold cyan", no_wrap=True)
-    info_table.add_column("value")
-    info_table.add_row("Model", settings.model_name)
-    info_table.add_row("Temperature", str(settings.temperature))
-    info_table.add_row("Max Tokens", str(settings.max_tokens))
-    info_table.add_row(
-        "Context Window",
-        _format_tokens(settings.context_window),
-    )
-
-    logo_text = Text(_LOGO, style="bold green")
-    left_content = Columns([logo_text, info_table], equal=False, expand=False)
-
-    # Stats line in the panel subtitle
-    stats_line = "[bold yellow]T:[/bold yellow] 0  [bold yellow]Ctx:[/bold yellow] 0%  [bold yellow]Tm:[/bold yellow] 0s  [bold yellow]#:[/bold yellow] 0  [bold yellow]$:[/bold yellow] ¥0.00"
-
-    left_panel = Panel(
-        left_content,
-        title="[bold green]clawagent[/bold green]",
-        subtitle=stats_line,
-        subtitle_align="right",
-        border_style="green",
-        padding=(1, 2),
-    )
-
-    console.print()
-    console.print(left_panel)
-    console.print()
-
-
-# ── Status line ────────────────────────────────────────────────────────
-
-
 def _context_color(pct: float) -> str:
     """Return Rich color name based on context usage percentage."""
     if pct < 70:
@@ -164,27 +106,45 @@ def _context_color(pct: float) -> str:
     return "red"
 
 
+# ── Splash screen ──────────────────────────────────────────────────────
+
+
+def render_splash(
+    settings: Settings,
+    pricing: PriceConfig,
+    console: Console,
+) -> None:
+    """Render a compact startup banner."""
+    console.print()
+    console.print(
+        f"  [bold green]clawagent[/bold green]  "
+        f"[dim]{settings.model_name}[/dim]  "
+        f"[dim]t={settings.temperature}[/dim]  "
+        f"[dim]ctx={_format_tokens(settings.context_window)}[/dim]"
+    )
+    console.print(f"  [dim]{_format_cost(0)} · 0 msg · 0s[/dim]")
+    console.print()
+
+
+# ── Status line ────────────────────────────────────────────────────────
+
+
 def render_status_line(
     stats: ConversationStats,
     pricing: PriceConfig,
     settings: Settings,
     console: Console,
 ) -> None:
-    """Render a compact one-line status bar inside a blue panel."""
+    """Render a compact right-aligned status line."""
     ctx_pct = stats.context_usage_pct(settings.context_window)
-    ctx_color = _context_color(ctx_pct)
     cost = stats.cost(pricing)
 
-    parts = [
-        f"[bold]R{stats.message_count + 1}[/bold]",
-        f"In [cyan]{_format_tokens(stats.cumulative_input_tokens)}[/cyan]",
-        f"Out [cyan]{_format_tokens(stats.cumulative_output_tokens)}[/cyan]",
-        f"Ctx [bold {ctx_color}]{ctx_pct:.1f}%[/bold {ctx_color}]",
-        _format_duration(stats.elapsed_seconds),
-        f"{stats.message_count} msg",
-        _format_cost(cost),
-    ]
-
-    text = Text.from_markup("  ·  ".join(parts))
-    panel = Panel(text, border_style="blue", padding=(0, 1))
-    console.print(panel)
+    line = (
+        f"[bold]R{stats.message_count + 1}[/bold]  "
+        f"[dim]In {_format_tokens(stats.cumulative_input_tokens)}  "
+        f"Out {_format_tokens(stats.cumulative_output_tokens)}  "
+        f"Ctx [{_context_color(ctx_pct)}]{ctx_pct:.1f}%[/]  "
+        f"{_format_duration(stats.elapsed_seconds)}  "
+        f"{_format_cost(cost)}[/dim]"
+    )
+    console.print(line, justify="right")

@@ -102,8 +102,8 @@ def recall_session(session_id: str, summary_only: bool = True) -> str:
 def summarize_session(session_id: str = "") -> str:
     """为指定会话生成或刷新摘要。
 
-    如果 session_id 为空则生成当前会话的摘要。
     摘要包含：标题（一句话主题）、内容概括（角色+话题+结论）。
+    必须提供有效的 session_id。
     """
     if not _db_path:
         return "记忆系统未初始化。"

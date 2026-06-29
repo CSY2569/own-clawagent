@@ -99,11 +99,8 @@ def main() -> None:
             print(f"  Found {len(chapter_spans)} chapter markers "
                   f"(e.g. {chapter_names})")
         chunks = chunk_text(content, chunk_size=args.chunk_size, overlap=args.overlap)
-        step = args.chunk_size - args.overlap
-        start = 0
-        for i, chunk in enumerate(chunks):
-            chapter = _chapter_for_pos(chapter_spans, start)
-            start = max(start + 1, start + step)
+        for i, (chunk, start_pos) in enumerate(chunks):
+            chapter = _chapter_for_pos(chapter_spans, start_pos)
             meta: dict[str, str] = {
                 "source": str(filepath.relative_to(docs_root)),
                 "chunk_index": str(i),

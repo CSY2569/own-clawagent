@@ -8,6 +8,7 @@ from clawagent.worker.config import load_worker_configs
 from clawagent.worker.registry import get_worker_class
 
 if TYPE_CHECKING:
+    from clawagent.config import Settings
     from clawagent.worker.base import BaseWorker
 
 
@@ -18,10 +19,16 @@ class WorkerFactory:
     1. Load all worker configs at startup (once)
     2. Look up the worker class by role
     3. Instantiate the worker with its config
+    4. Track runtime settings for hot-reload support
     """
 
     def __init__(self) -> None:
         self._configs = load_worker_configs()
+        self._current_settings: Settings | None = None
+
+    def set_settings(self, settings: Settings) -> None:
+        """Update runtime settings for worker model hot-reload."""
+        self._current_settings = settings
 
     @property
     def available_roles(self) -> list[str]:

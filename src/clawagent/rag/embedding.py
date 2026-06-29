@@ -1,6 +1,7 @@
 """SiliconFlow cloud embedding via REST API."""
 
 import time
+import urllib.error
 import urllib.request
 from json import JSONDecodeError
 
@@ -78,6 +79,12 @@ class SiliconFlowEmbedding:
                         f"({len(batch)} texts)"
                     )
                     break
+                except urllib.error.HTTPError as e:
+                    if 400 <= e.code < 500 and e.code != 429:
+                        raise
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        time.sleep(2 ** attempt)
                 except (OSError, JSONDecodeError, KeyError) as e:
                     last_error = e
                     if attempt < max_retries - 1:

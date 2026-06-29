@@ -21,17 +21,31 @@ class BM25Retriever:
         b: Length normalization parameter (default 0.75).
     """
 
-    def __init__(self, corpus: list[str], k1: float = 1.5, b: float = 0.75) -> None:
-        self._corpus = corpus
+    def __init__(self, corpus: list[str] | None = None, k1: float = 1.5, b: float = 0.75) -> None:
+        self._corpus = corpus or []
         self._k1 = k1
         self._b = b
+        self._ready = False
         self._N = 0
         self._avgdl = 0.0
         self._df: dict[str, int] = {}
         self._idf: dict[str, float] = {}
         self._doc_len: list[int] = []
         self._tf: list[dict[str, int]] = []
+        if self._corpus:
+            self._build_index()
+            self._ready = True
+
+    @property
+    def ready(self) -> bool:
+        """Whether the BM25 index has been built."""
+        return self._ready
+
+    def build_async(self, corpus: list[str]) -> None:
+        """Build BM25 index from corpus. Called from a background thread."""
+        self._corpus = corpus
         self._build_index()
+        self._ready = True
 
     def _tokenize(self, text: str) -> list[str]:
         """Tokenize text with jieba, dropping whitespace and pure-punctuation tokens."""

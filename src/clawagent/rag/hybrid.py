@@ -49,6 +49,10 @@ class HybridSearcher:
             knn_hits = self._knn(query, fetch_k)
         except Exception:
             knn_hits = []
+
+        if not self._bm25.ready:
+            return knn_hits[:top_k]
+
         bm25_hits = self._bm25.retrieve(query, top_k=fetch_k)
         return self._rrf_fusion(knn_hits, bm25_hits, top_k)
 
@@ -105,7 +109,10 @@ class HybridSearcher:
                 rrf[key] = (score, doc_hit)
 
         sorted_hits = sorted(rrf.values(), key=lambda x: x[0], reverse=True)
-        return [hit for _, hit in sorted_hits[:top_k]]
+        return [
+            {**hit, "score": f"{rrf_score:.4f}"}
+            for rrf_score, hit in sorted_hits[:top_k]
+        ]
 
     @staticmethod
     def _hash(text: str) -> str:

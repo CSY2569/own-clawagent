@@ -7,10 +7,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# Project root directory (own-clawagent/)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
 
 def _load_env() -> None:
-    """Load .env from project root (parent of src/)."""
-    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    """Load .env from project root."""
+    env_path = _PROJECT_ROOT / ".env"
     if env_path.exists():
         load_dotenv(env_path)
 
@@ -24,7 +27,7 @@ class Settings:
 
     anthropic_api_key: str
     model_name: str = "deepseek-v4-flash"
-    model_provider: str = ""
+    model_provider: str = "anthropic"
     max_tokens: int = 4096
     temperature: float = 0.0
     context_window: int = 1_000_000
@@ -55,7 +58,7 @@ class Settings:
         return cls(
             anthropic_api_key=api_key,
             model_name=os.getenv("CLAWAGENT_MODEL", "deepseek-v4-flash"),
-            model_provider=os.getenv("CLAWAGENT_MODEL_PROVIDER", ""),
+            model_provider=os.getenv("CLAWAGENT_MODEL_PROVIDER", "anthropic"),
             context_window=context_window,
             memory_db_path=os.getenv("CLAWAGENT_MEMORY_DB", "memories/sessions.db"),
             max_preferences=int(os.getenv("CLAWAGENT_MAX_PREFERENCES", "5")),
@@ -90,7 +93,7 @@ class PriceBook:
         return self.models.get(model_name, PriceConfig())
 
 
-def load_price_book() -> PriceBook:
+def load_price_book(price_path: str | Path | None = None) -> PriceBook:
     """Parse price.txt and return a PriceBook.
 
     Expected format (Chinese table from DeepSeek docs):
@@ -99,8 +102,13 @@ def load_price_book() -> PriceBook:
         百万tokens输入(缓存命中)  0.02元  0.025元
         百万tokens输入(缓存未命中)  1元  3元
         百万tokens输出  2元  6元
+
+    Args:
+        price_path: Path to price.txt. Defaults to PROJECT_ROOT/price.txt.
     """
-    price_path = Path(__file__).resolve().parent.parent.parent / "price.txt"
+    if price_path is None:
+        price_path = _PROJECT_ROOT / "price.txt"
+    price_path = Path(price_path)
     if not price_path.exists():
         return PriceBook()
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from langchain_anthropic import ChatAnthropic
+from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import create_react_agent
@@ -20,14 +20,14 @@ import clawagent.worker.critic
 import clawagent.worker.researcher
 import clawagent.worker.writer  # noqa: F401
 from clawagent.compression import CompressionConfig, make_state_modifier
-from clawagent.config import Settings
+from clawagent.config import _PROJECT_ROOT, Settings
 from clawagent.memory.summarizer import ensure_session_entry
 from clawagent.memory.summarizer import save_messages as _save_messages
 from clawagent.prompt_builder import PromptBuilder
+from clawagent.stream_events import StreamEvent
 from clawagent.tools import ALL_TOOLS
 from clawagent.tools.memory_tools import configure as _configure_memory_tools
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
 
@@ -38,14 +38,15 @@ def _ensure_memory_dir(path: str) -> str:
     return str(db_path.resolve())
 
 
-def _make_model(settings: Settings) -> ChatAnthropic:
-    """Build a ChatAnthropic model from settings."""
-    return ChatAnthropic(
+def _make_model(settings: Settings) -> Any:
+    """Build a chat model via init_chat_model (supports any provider)."""
+    return init_chat_model(
         model=settings.model_name,
+        model_provider=settings.model_provider or None,
         api_key=SecretStr(settings.anthropic_api_key),
         max_tokens=settings.max_tokens,
         temperature=settings.temperature,
-    )  # type: ignore[call-arg]
+    )
 
 
 def _make_sys_prompt(settings: Settings, memory_db_path: str) -> str:
@@ -93,6 +94,7 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
     from clawagent.worker.factory import WorkerFactory
 
     factory = WorkerFactory()
+    factory.set_settings(settings)
     configure_worker_factory(factory)
 
     compression_config = _make_compression_config(settings)
@@ -228,17 +230,159 @@ class Agent:
             with contextlib.suppress(Exception):
                 _save_messages(self._db_path, tid, [("user", message), ("assistant", text)])
                 ensure_session_entry(self._db_path, tid, message)
+                from clawagent.memory.preferences import extract_preferences_from_messages
+                extract_preferences_from_messages(
+                    messages_text=message + "\n" + text,
+                    session_id=tid,
+                    db_path=self._db_path,
+                )
 
         return AgentResponse(text=text, usage=usage)
 
-    def stream(self, message: str) -> Iterator[str]:
-        """Stream the agent's response, yielding state after each node step."""
-        for chunk in self._graph.stream(
-            {"messages": [("user", message)]},
-            config={"configurable": {"thread_id": self._thread_id}},
-            stream_mode="values",
-        ):
-            if chunk.get("messages"):
-                last_msg = chunk["messages"][-1]
-                if hasattr(last_msg, "content") and last_msg.content:
-                    yield str(last_msg.content)
+    def stream_events(
+        self, message: str, thread_id: str | None = None
+    ) -> Iterator[StreamEvent]:
+        """Stream agent execution at message-chunk granularity.
+
+        Uses stream_mode="messages" for token-level typewriter effect.
+        Yields: think_start, think_end, token, tool_call, tool_result, error, done.
+        """
+        import json
+
+        tid = thread_id or self._thread_id
+        all_text: list[str] = []
+        tool_call_accum: dict[str, dict[str, str]] = {}
+        usage = Usage()
+        in_thinking: bool = False
+        tool_calls_emitted: set[str] = set()
+
+        try:
+            for msg_chunk, metadata in self._graph.stream(
+                {"messages": [("user", message)]},
+                config={"configurable": {"thread_id": tid}},
+                stream_mode="messages",
+            ):
+                node = metadata.get("langgraph_node", "") if isinstance(metadata, dict) else ""
+
+                if node == "agent":
+                    # ── Text chunk ──
+                    chunk_text = getattr(msg_chunk, "content", None)
+                    if chunk_text:
+                        if isinstance(chunk_text, list):
+                            for block in chunk_text:
+                                if not isinstance(block, dict):
+                                    continue
+                                btype = block.get("type", "")
+                                text = block.get("text", "") or block.get("thinking", "")
+                                if btype == "thinking" and text:
+                                    if not in_thinking:
+                                        in_thinking = True
+                                        yield StreamEvent(kind="think_start")
+                                elif btype == "text" and text:
+                                    if in_thinking:
+                                        in_thinking = False
+                                        yield StreamEvent(kind="think_end")
+                                    all_text.append(text)
+                                    yield StreamEvent(kind="token", node="agent", content=text)
+                        elif isinstance(chunk_text, str) and chunk_text:
+                            all_text.append(chunk_text)
+                            yield StreamEvent(kind="token", node="agent", content=chunk_text)
+
+                    # ── Tool call chunks (incremental) ──
+                    tcc_list = getattr(msg_chunk, "tool_call_chunks", None)
+                    if tcc_list:
+                        all_text.clear()  # C2: discard pre-tool filler text
+                        for tcc in tcc_list:
+                            tc_id = tcc.get("id", "")
+                            if not tc_id:
+                                continue
+                            if tc_id not in tool_call_accum:
+                                tool_call_accum[tc_id] = {"name": "", "args": ""}
+                            name_piece = tcc.get("name", "") or ""
+                            args_piece = tcc.get("args", "") or ""
+                            if name_piece:
+                                tool_call_accum[tc_id]["name"] += name_piece
+                            if args_piece:
+                                tool_call_accum[tc_id]["args"] += args_piece
+
+                    # ── Usage extraction ──
+                    meta = getattr(msg_chunk, "response_metadata", None) or {}
+                    if meta.get("usage"):
+                        usage = Usage.from_response_metadata(meta)
+
+                elif node == "tools":
+                    if in_thinking:
+                        in_thinking = False
+                        yield StreamEvent(kind="think_end")
+
+                    for tc_id, acc in tool_call_accum.items():
+                        if tc_id in tool_calls_emitted:
+                            continue
+                        name = acc["name"]
+                        if not name:
+                            continue
+                        try:
+                            args = json.loads(acc["args"]) if acc["args"] else {}
+                        except (json.JSONDecodeError, ValueError):
+                            args = {"raw": acc["args"]}
+                        tool_calls_emitted.add(tc_id)
+                        yield StreamEvent(
+                            kind="tool_call",
+                            node="agent",
+                            content=name,
+                            metadata={"args": args},
+                        )
+
+                    preview = str(getattr(msg_chunk, "content", ""))[:200]
+                    yield StreamEvent(
+                        kind="tool_result",
+                        node="tools",
+                        content=getattr(msg_chunk, "name", ""),
+                        metadata={"preview": preview},
+                    )
+
+        except Exception as e:
+            yield StreamEvent(kind="error", content=f"{type(e).__name__}: {e}")
+            return
+
+        # ── Usage fallback via get_state ──
+        if usage.input_tokens == 0 and usage.output_tokens == 0:
+            try:
+                final_state = self._graph.get_state({"configurable": {"thread_id": tid}})
+                if final_state and final_state.values:
+                    msgs = final_state.values.get("messages", [])
+                    if msgs:
+                        last = msgs[-1]
+                        meta = getattr(last, "response_metadata", None) or {}
+                        if meta.get("usage"):
+                            usage = Usage.from_response_metadata(meta)
+            except Exception:
+                pass
+
+        final_text = "".join(all_text)
+
+        # Persist conversation
+        if self._db_path and final_text:
+            with contextlib.suppress(Exception):
+                _save_messages(self._db_path, tid, [
+                    ("user", message),
+                    ("assistant", final_text),
+                ])
+                ensure_session_entry(self._db_path, tid, message)
+                from clawagent.memory.preferences import extract_preferences_from_messages
+                extract_preferences_from_messages(
+                    messages_text=message + "\n" + final_text,
+                    session_id=tid,
+                    db_path=self._db_path,
+                )
+
+        yield StreamEvent(
+            kind="done",
+            content=final_text,
+            metadata={
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "cache_read_input_tokens": usage.cache_read_input_tokens,
+                "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+            },
+        )

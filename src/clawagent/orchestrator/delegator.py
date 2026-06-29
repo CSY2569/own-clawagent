@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import tool
 
 if TYPE_CHECKING:
+    from clawagent.config import Settings
     from clawagent.worker.factory import WorkerFactory
 
 # Module-level state, set by agent.py on startup
@@ -17,6 +18,16 @@ def configure_worker_factory(factory: WorkerFactory) -> None:
     """Set the module-level WorkerFactory for use by delegate_task."""
     global _worker_factory
     _worker_factory = factory
+
+
+def update_worker_settings(settings: Settings) -> None:
+    """Update runtime settings on the configured WorkerFactory for hot-reload.
+
+    Call this after /model, /temp, /max-tokens, or /compress so that
+    subsequently spawned workers see the new settings.
+    """
+    if _worker_factory is not None:
+        _worker_factory.set_settings(settings)
 
 
 @tool
@@ -45,7 +56,8 @@ def delegate_task(role: str, task: str) -> str:
         return f"错误: {e}"
 
     try:
-        result = worker.run(task)
+        agent = worker.spawn(task, settings=_worker_factory._current_settings)
+        result = agent.run(task).text
         max_len = 50_000
         if len(result) > max_len:
             result = result[:max_len] + f"\n\n...（结果已截断，共 {len(result)} 字符）"

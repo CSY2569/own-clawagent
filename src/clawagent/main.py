@@ -4,7 +4,6 @@ import sys
 import time
 from collections.abc import Iterable
 from dataclasses import replace
-from pathlib import Path
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
@@ -13,15 +12,16 @@ from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.rule import Rule
+from rich.table import Table
 
-from clawagent.agent import Agent, create_agent
-from clawagent.config import PriceConfig, Settings, load_price_book
+from clawagent.agent import Agent, Usage, create_agent
+from clawagent.config import _PROJECT_ROOT, PriceConfig, Settings, load_price_book
 from clawagent.memory.summarizer import load_messages
+from clawagent.orchestrator.delegator import update_worker_settings
 from clawagent.tools.memory_tools import list_sessions as _list_sessions_tool
 from clawagent.tools.rag_tool import configure_hybrid_search, search_rag
 from clawagent.ui import ConversationStats, render_splash, render_status_line
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+from clawagent.ui_stream import stream_display
 
 _SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/sessions", "列出所有历史会话"),
@@ -64,8 +64,13 @@ def main() -> None:
     graph, conn = create_agent(settings)
     agent_ref: dict[str, Agent] = {"agent": Agent(graph, db_path=settings.memory_db_path, conn=conn)}
 
+    # Signal: BM25 background build completed (one-shot hint in REPL)
+    _bm25_ready_signal: list[bool] = []
+
     # Initialize RAG if SILICONFLOW_API_KEY is configured
     if settings.siliconflow_api_key:
+        import threading
+
         from clawagent.rag import BM25Retriever, HybridSearcher, RAGStore, SiliconFlowEmbedding
 
         embedding = SiliconFlowEmbedding(
@@ -78,7 +83,9 @@ def main() -> None:
 
         all_docs = rag_store.get_all_documents()
         corpus = [d["text"] for d in all_docs]
-        bm25 = BM25Retriever(corpus)
+
+        # Create BM25 without building index — build happens in background
+        bm25 = BM25Retriever()
 
         def _knn_retrieve(query: str, k: int) -> list[dict[str, str]]:
             return rag_store.retrieve(query, top_k=k)
@@ -89,6 +96,12 @@ def main() -> None:
             all_docs=all_docs,
         )
         configure_hybrid_search(hybrid)
+
+        def _build_bm25() -> None:
+            bm25.build_async(corpus)
+            _bm25_ready_signal.append(True)
+
+        threading.Thread(target=_build_bm25, daemon=True).start()
 
     # One-shot mode — plain output, no Rich
     if len(sys.argv) > 1:
@@ -102,6 +115,8 @@ def main() -> None:
     pricing = load_price_book().get(settings.model_name)
 
     render_splash(settings, pricing, console)
+    if settings.siliconflow_api_key:
+        console.print("[dim]BM25 索引后台构建中，搜索将临时使用纯向量检索...[/dim]")
     stats = ConversationStats(start_time=time.monotonic())
 
     pt_session: PromptSession[str] = PromptSession(
@@ -113,13 +128,16 @@ def main() -> None:
 
     try:
         while True:
+            if _bm25_ready_signal:
+                console.print()
+                console.print("[dim]BM25 索引构建完成，搜索已升级为混合检索[/dim]")
+                _bm25_ready_signal.clear()
             console.print()
             render_status_line(stats, pricing, settings, console)
-            console.print(Rule(style="blue", characters="─"))
+            console.print(Rule(style="dim"))
             user_input = pt_session.prompt(
-                [("class:prompt", "You: ")]
+                [("class:prompt", "› ")]
             ).strip()
-            console.print(Rule(style="blue", characters="─"))
             if user_input.lower() in ("quit", "exit", "q"):
                 break
             if not user_input:
@@ -130,9 +148,24 @@ def main() -> None:
                 settings, pricing = _handle_command(user_input, agent_ref, settings, console, stats, pricing)
                 continue
 
-            response = agent_ref["agent"].run(user_input)
-            stats.update(response.usage)
-            console.print(f"\n[bold blue]Agent:[/bold blue] {response.text}")
+            try:
+                with stream_display() as display:
+                    for event in agent_ref["agent"].stream_events(user_input):
+                        display.handle(event)
+                        if event.kind == "done":
+                            stats.update(
+                                Usage(
+                                    input_tokens=event.metadata.get("input_tokens", 0),
+                                    output_tokens=event.metadata.get("output_tokens", 0),
+                                    cache_read_input_tokens=event.metadata.get("cache_read_input_tokens", 0),
+                                    cache_creation_input_tokens=event.metadata.get("cache_creation_input_tokens", 0),
+                                )
+                            )
+            except Exception:
+                console.print("\n[red]Streaming error, falling back to non-streaming mode...[/red]")
+                response = agent_ref["agent"].run(user_input)
+                stats.update(response.usage)
+                console.print(f"\n[bold blue]Agent:[/bold blue] {response.text}")
     except (EOFError, KeyboardInterrupt):
         console.print("\nGoodbye!")
     finally:
@@ -161,6 +194,7 @@ def _handle_command(
         model_name = cmd[7:].strip()
         new_settings = replace(settings, model_name=model_name)
         agent.reconfigure(new_settings)
+        update_worker_settings(new_settings)
         new_pricing = load_price_book().get(model_name)
         console.print(f"[green]模型已切换至: {model_name}[/green]")
         return new_settings, new_pricing
@@ -172,6 +206,7 @@ def _handle_command(
             return settings, pricing
         new_settings = replace(settings, temperature=temp)
         agent.reconfigure(new_settings)
+        update_worker_settings(new_settings)
         console.print(f"[green]温度已设置为: {temp}[/green]")
         return new_settings, pricing
     elif cmd.startswith("/max-tokens "):
@@ -182,19 +217,18 @@ def _handle_command(
             return settings, pricing
         new_settings = replace(settings, max_tokens=max_tok)
         agent.reconfigure(new_settings)
+        update_worker_settings(new_settings)
         console.print(f"[green]最大输出 token 数已设置为: {max_tok}[/green]")
         return new_settings, pricing
     elif cmd == "/settings":
+        from clawagent.ui import _format_tokens
+
         console.print(
-            f"Model:       {settings.model_name}\n"
-            f"Temperature: {settings.temperature}\n"
-            f"Max Tokens:  {settings.max_tokens}\n"
-            f"Context:     {settings.context_window}\n"
-            f"\n[bold]压缩:[/bold]\n"
-            f"Strategy:    {settings.compression_strategy}\n"
-            f"Max Msgs:    {settings.compression_max_messages}\n"
-            f"Max Tokens:  {settings.compression_max_tokens}\n"
-            f"Keep Recent: {settings.compression_keep_recent}"
+            f"[bold]Model[/] {settings.model_name}  "
+            f"[bold]T[/] {settings.temperature}  "
+            f"[bold]Tok[/] {settings.max_tokens}  "
+            f"[bold]Ctx[/] {_format_tokens(settings.context_window)}  "
+            f"[bold]Compress[/] {settings.compression_strategy}"
         )
     elif cmd.startswith("/compress "):
         strategy = cmd[10:].strip()
@@ -204,6 +238,7 @@ def _handle_command(
             return settings, pricing
         new_settings = replace(settings, compression_strategy=strategy)
         agent.reconfigure(new_settings)
+        update_worker_settings(new_settings)
         console.print(f"[green]压缩策略已切换至: {strategy}[/green]")
         return new_settings, pricing
     elif cmd.startswith("/rag-search "):
@@ -213,20 +248,13 @@ def _handle_command(
         else:
             _rag_search(query, console)
     elif cmd == "/help":
-        console.print(
-            "[bold]可用命令:[/bold]\n"
-            "  /sessions     — 列出所有历史会话\n"
-            "  /load <id>    — 加载指定会话（编号来自 /sessions）\n"
-            "  /new          — 创建新会话\n"
-            "  /model <name> — 切换模型（如 deepseek-v4-pro）\n"
-            "  /temp <n>     — 设置 temperature（如 0.7）\n"
-            "  /max-tokens   — 设置最大输出 token 数（如 8192）\n"
-            "  /compress     — 切换压缩策略 (trim / token_trim / summarize)\n"
-            "  /settings     — 显示当前设置\n"
-            "  /rag-search <关键词> — 直接搜索 RAG 向量库（不经过 LLM）\n"
-            "  /help         — 显示此帮助\n"
-            "  quit / q      — 退出"
-        )
+        table = Table(box=None, padding=(0, 2))
+        table.add_column("Command", style="cyan", no_wrap=True)
+        table.add_column("Description", style="dim")
+        for cmd_name, desc in _SLASH_COMMANDS:
+            table.add_row(cmd_name, desc)
+        table.add_row("quit / q", "退出")
+        console.print(table)
     else:
         console.print(f"[yellow]未知命令: {cmd}。输入 /help 查看可用命令。[/yellow]")
 
@@ -271,7 +299,7 @@ def _load_session(
     settings: Settings,
     console: Console,
 ) -> None:
-    """Load a historical session and display its messages."""
+    """Load a historical session and switch to it for continued conversation."""
     from clawagent.memory.summarizer import get_summary
 
     # Load messages from the session
@@ -283,18 +311,21 @@ def _load_session(
             console.print(f"[bold]会话 {session_id}:[/bold]")
             console.print(f"标题: {summary['title']}")
             console.print(f"摘要: {summary['summary']}")
-            console.print("（当前会话未切换，使用 /new 创建新会话继续对话）")
         else:
             console.print(f"[red]未找到会话: {session_id}[/red]")
-        return
+            return
 
-    console.print(f"[bold]会话 {session_id}:[/bold]")
-    for m in messages:
-        role = m.get("role", "?")
-        content = m.get("content", "")
-        style = "green" if role == "user" else "blue"
-        console.print(f"[{style}]{role}:[/] {content[:200]}")
-    console.print(f"\n[dim]共 {len(messages)} 条消息[/dim]")
+    if messages:
+        console.print(f"[bold]会话 {session_id}:[/bold]")
+        for m in messages:
+            role = m.get("role", "?")
+            content = m.get("content", "")
+            style = "green" if role == "user" else "blue"
+            console.print(f"[{style}]{role}:[/] {content[:200]}")
+        console.print(f"\n[dim]共 {len(messages)} 条消息[/dim]")
+
+    agent._thread_id = session_id
+    console.print(f"\n[green]已切换到会话 {session_id}，可以继续对话。[/green]")
 
 
 def _new_session(

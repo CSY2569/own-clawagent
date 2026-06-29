@@ -26,8 +26,7 @@ __all__ = [
 ]
 
 # Project root for path-safe file operations
-# __file__ = src/clawagent/tools/__init__.py → parent.parent.parent = project root
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+from clawagent.config import _PROJECT_ROOT
 
 
 def _resolve_path(path: str) -> Path:

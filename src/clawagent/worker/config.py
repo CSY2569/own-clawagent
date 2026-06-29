@@ -56,11 +56,13 @@ def load_worker_configs() -> dict[str, WorkerConfig]:
     # Discover worker roles from env vars matching WORKER_*_MODEL
     roles: set[str] = set()
     for key in os.environ:
-        if key.startswith("WORKER_") and key.endswith("_MODEL") and not key.startswith("WORKER_COMMON_"):
-            # Extract role: WORKER_CODER_MODEL → coder
-            role = key.removeprefix("WORKER_").removesuffix("_MODEL").lower()
-            if role:
-                roles.add(role)
+        if key.startswith("WORKER_") and not key.startswith("WORKER_COMMON_"):
+            for suffix in ("_MODEL", "_API_KEY", "_API_BASE"):
+                if key.endswith(suffix):
+                    role = key.removeprefix("WORKER_").removesuffix(suffix).lower()
+                    if role:
+                        roles.add(role)
+                    break
 
     if not roles:
         return {}

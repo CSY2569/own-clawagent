@@ -95,7 +95,7 @@ class RAGStore:
         hits: list[dict[str, str]] = []
         ids_list: list[str] = (results.get("ids") or [[]])[0]
         docs_list: list[str] = (results.get("documents") or [[]])[0]
-        distances: list[float] = (results.get("distances") or [[]])[0]
+        distances: Sequence[float] = (results.get("distances") or [[]])[0]
         metas_list: Sequence[Mapping[str, Any]] = (results.get("metadatas") or [[]])[0]
         for i in range(len(ids_list)):
             score = 1.0 / (1.0 + distances[i]) if distances and i < len(distances) else 0.0
