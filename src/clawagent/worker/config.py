@@ -26,6 +26,7 @@ class WorkerConfig:
         tools:           Tool functions available to this worker
         api_key:         Optional independent API key for different providers
         api_base:        Optional API base URL for OpenAI-compatible providers
+        api_pool:        Key pool name for this worker (empty = use default)
     """
 
     role: str
@@ -39,6 +40,7 @@ class WorkerConfig:
     tools: list[Any] = field(default_factory=list)
     api_key: str = ""
     api_base: str = ""
+    api_pool: str = ""
 
 
 def _env(key: str, default: str = "") -> str:
@@ -57,7 +59,7 @@ def load_worker_configs() -> dict[str, WorkerConfig]:
     roles: set[str] = set()
     for key in os.environ:
         if key.startswith("WORKER_") and not key.startswith("WORKER_COMMON_"):
-            for suffix in ("_MODEL", "_API_KEY", "_API_BASE"):
+            for suffix in ("_MODEL", "_API_KEY", "_API_BASE", "_API_POOL"):
                 if key.endswith(suffix):
                     role = key.removeprefix("WORKER_").removesuffix(suffix).lower()
                     if role:
@@ -81,5 +83,6 @@ def load_worker_configs() -> dict[str, WorkerConfig]:
             request_timeout=int(_env(f"{prefix}_REQUEST_TIMEOUT", _env("WORKER_COMMON_REQUEST_TIMEOUT", "120"))),
             api_key=_env(f"{prefix}_API_KEY", _env("WORKER_COMMON_API_KEY")),
             api_base=_env(f"{prefix}_API_BASE", _env("WORKER_COMMON_API_BASE")),
+            api_pool=_env(f"{prefix}_API_POOL", _env("WORKER_COMMON_API_POOL")),
         )
     return configs

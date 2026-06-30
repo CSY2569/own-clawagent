@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from langchain.agents import create_agent as _create_agent
+from langchain.agents.middleware import before_model
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.prebuilt import create_react_agent
 from pydantic import SecretStr
 
 # Ensure worker classes are registered before WorkerFactory is created
@@ -19,6 +20,7 @@ import clawagent.worker.coder
 import clawagent.worker.critic
 import clawagent.worker.researcher
 import clawagent.worker.writer  # noqa: F401
+from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.compression import CompressionConfig, make_state_modifier
 from clawagent.config import _PROJECT_ROOT, Settings
 from clawagent.memory.summarizer import ensure_session_entry
@@ -39,14 +41,26 @@ def _ensure_memory_dir(path: str) -> str:
 
 
 def _make_model(settings: Settings) -> Any:
-    """Build a chat model via init_chat_model (supports any provider)."""
-    return init_chat_model(
+    """Build a chat model via init_chat_model, with optional key-pool wrapping."""
+    model = init_chat_model(
         model=settings.model_name,
         model_provider=settings.model_provider or None,
         api_key=SecretStr(settings.anthropic_api_key),
         max_tokens=settings.max_tokens,
         temperature=settings.temperature,
     )
+
+    # Wrap with KeyPoolChatModel if a pool with keys is configured
+    pool = get_global_pool()
+    default_stats = pool.get_pool_stats("default")
+    if default_stats.get("total", 0) > 0:
+        model = KeyPoolChatModel(
+            pool=pool,
+            pool_name="default",
+            inner=model,
+        )
+
+    return model
 
 
 def _make_sys_prompt(settings: Settings, memory_db_path: str) -> str:
@@ -99,12 +113,18 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
 
     compression_config = _make_compression_config(settings)
 
-    graph = create_react_agent(
+    graph = _create_agent(
         model=model,
         tools=_make_all_tools(),
         checkpointer=SqliteSaver(conn),
-        prompt=sys_prompt,
-        pre_model_hook=make_state_modifier(config=compression_config, model=model),
+        system_prompt=sys_prompt,
+        middleware=[
+            before_model(
+                lambda state, runtime: make_state_modifier(
+                    config=compression_config, model=model
+                )(state)
+            )
+        ],
     )
     return graph, conn
 
@@ -124,12 +144,18 @@ def rebuild_graph(
 
     compression_config = _make_compression_config(settings)
 
-    return create_react_agent(
+    return _create_agent(
         model=model,
         tools=_make_all_tools(),
         checkpointer=SqliteSaver(conn),
-        prompt=sys_prompt,
-        pre_model_hook=make_state_modifier(config=compression_config, model=model),
+        system_prompt=sys_prompt,
+        middleware=[
+            before_model(
+                lambda state, runtime: make_state_modifier(
+                    config=compression_config, model=model
+                )(state)
+            )
+        ],
     )
 
 
@@ -264,7 +290,7 @@ class Agent:
             ):
                 node = metadata.get("langgraph_node", "") if isinstance(metadata, dict) else ""
 
-                if node == "agent":
+                if node in ("agent", "model"):
                     # ── Text chunk ──
                     chunk_text = getattr(msg_chunk, "content", None)
                     if chunk_text:

@@ -61,7 +61,7 @@ class StreamDisplay:
         self._done: bool = False
         self._token_buffer: str = ""
         self._last_refresh: float = 0.0
-        self._stats: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        self._stats: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "cache_tokens": 0}
 
     def handle(self, event: StreamEvent) -> None:
         """Route a StreamEvent to the appropriate handler."""
@@ -138,6 +138,7 @@ class StreamDisplay:
             self._token_buffer = event.content
         self._stats["input_tokens"] = event.metadata.get("input_tokens", 0)
         self._stats["output_tokens"] = event.metadata.get("output_tokens", 0)
+        self._stats["cache_tokens"] = event.metadata.get("cache_read_input_tokens", 0) + event.metadata.get("cache_creation_input_tokens", 0)
         self._refresh()
 
     def _render(self) -> Group | Text:
@@ -169,6 +170,8 @@ class StreamDisplay:
                 stats_parts.append(f"In [dim]{self._stats['input_tokens']}[/dim]")
             if self._stats["output_tokens"]:
                 stats_parts.append(f"Out [dim]{self._stats['output_tokens']}[/dim]")
+            if self._stats["cache_tokens"]:
+                stats_parts.append(f"Cache [dim]{self._stats['cache_tokens']}[/dim]")
             parts.append(Text.from_markup("  [bold]·[/bold] ".join(stats_parts)))
 
         return Group(*parts)

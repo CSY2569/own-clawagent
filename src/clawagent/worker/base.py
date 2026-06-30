@@ -9,10 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.prebuilt import create_react_agent
 
+from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.config import Settings
 from clawagent.prompt_builder import PromptBuilder
 from clawagent.worker.config import WorkerConfig
@@ -102,6 +103,17 @@ class BaseWorker(ABC):
             **kwargs,
         )
 
+        # Wrap with KeyPoolChatModel if a pool is configured for this worker
+        pool_name = self.config.api_pool or "default"
+        pool = get_global_pool()
+        pool_stats = pool.get_pool_stats(pool_name)
+        if pool_stats.get("total", 0) > 0:
+            model = KeyPoolChatModel(
+                pool=pool,
+                pool_name=pool_name,
+                inner=model,
+            )
+
         sys_prompt = self.build_prompt(task)
 
         db_path = self._ensure_memory_db()
@@ -109,11 +121,11 @@ class BaseWorker(ABC):
         self._conn = conn
         saver = SqliteSaver(conn)
 
-        graph = create_react_agent(
+        graph = create_agent(
             model=model,
             tools=self._get_tools(),
             checkpointer=saver,
-            prompt=sys_prompt,
+            system_prompt=sys_prompt,
         )
 
         agent = Agent(graph=graph, db_path=db_path, conn=conn, default_thread_id=uuid4().hex[:8])

@@ -115,7 +115,7 @@ def summarize_by_llm(
     if old_summary:
         summary_prompt += f"之前的对话摘要：{old_summary}\n\n后续对话：\n"
     summary_prompt += "\n".join(
-        f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {m.content[:500]}"
+        f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {_safe_extract_text(m.content)[:500]}"
         for m in to_summarize
     )
 

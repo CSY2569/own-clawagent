@@ -1,8 +1,11 @@
 """BM25 lexical retriever with jieba tokenization."""
 
+import logging
 from math import log
 
 import jieba  # type: ignore[import-untyped]
+
+jieba.setLogLevel(logging.WARNING)
 
 
 class BM25Retriever:

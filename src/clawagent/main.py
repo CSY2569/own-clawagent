@@ -15,6 +15,7 @@ from rich.rule import Rule
 from rich.table import Table
 
 from clawagent.agent import Agent, Usage, create_agent
+from clawagent.api_pool import init_global_pool
 from clawagent.config import _PROJECT_ROOT, PriceConfig, Settings, load_price_book
 from clawagent.memory.summarizer import load_messages
 from clawagent.orchestrator.delegator import update_worker_settings
@@ -60,6 +61,9 @@ def main() -> None:
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # Initialize API key pool (no-op if no API_POOL_* vars set)
+    pool = init_global_pool()
 
     graph, conn = create_agent(settings)
     agent_ref: dict[str, Agent] = {"agent": Agent(graph, db_path=settings.memory_db_path, conn=conn)}
@@ -117,6 +121,18 @@ def main() -> None:
     render_splash(settings, pricing, console)
     if settings.siliconflow_api_key:
         console.print("[dim]BM25 索引后台构建中，搜索将临时使用纯向量检索...[/dim]")
+
+    # Show pool status if configured
+    all_stats = pool.get_all_stats()
+    if all_stats:
+        parts = []
+        for name, s in all_stats.items():
+            active = s.get("active", 0)
+            total = s.get("total", 0)
+            parts.append(f"{name}({active}/{total} active)")
+        if parts:
+            console.print(f"[dim]API Key Pool: {', '.join(parts)}[/dim]")
+
     stats = ConversationStats(start_time=time.monotonic())
 
     pt_session: PromptSession[str] = PromptSession(
@@ -192,12 +208,16 @@ def _handle_command(
         _new_session(agent_ref, settings, console, stats)
     elif cmd.startswith("/model "):
         model_name = cmd[7:].strip()
-        new_settings = replace(settings, model_name=model_name)
-        agent.reconfigure(new_settings)
-        update_worker_settings(new_settings)
-        new_pricing = load_price_book().get(model_name)
-        console.print(f"[green]模型已切换至: {model_name}[/green]")
-        return new_settings, new_pricing
+        try:
+            new_settings = replace(settings, model_name=model_name)
+            agent.reconfigure(new_settings)
+            update_worker_settings(new_settings)
+            new_pricing = load_price_book().get(model_name)
+            console.print(f"[green]模型已切换至: {model_name}[/green]")
+            return new_settings, new_pricing
+        except Exception as e:
+            console.print(f"[red]无效模型名 '{model_name}'：{e}[/red]")
+            return settings, pricing
     elif cmd.startswith("/temp "):
         try:
             temp = float(cmd[6:].strip())
