@@ -2,8 +2,14 @@
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
+import pyfiglet
+from rich.columns import Columns
 from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from clawagent.agent import Usage
 from clawagent.config import PriceConfig, Settings
@@ -113,17 +119,56 @@ def render_splash(
     settings: Settings,
     pricing: PriceConfig,
     console: Console,
+    pool_stats: dict[str, dict[str, Any]] | None = None,
+    worker_roles: list[str] | None = None,
 ) -> None:
-    """Render a compact startup banner."""
+    """Render a startup banner with pyfiglet logo, info table, and welcome message."""
     console.print()
-    console.print(
-        f"  [bold green]clawagent[/bold green]  "
-        f"[dim]{settings.model_name}[/dim]  "
-        f"[dim]t={settings.temperature}[/dim]  "
-        f"[dim]ctx={_format_tokens(settings.context_window)}[/dim]"
+
+    # ── Left column: ASCII logo ─────────────────────────────────
+    try:
+        logo_text = pyfiglet.Figlet(font="slant", width=30).renderText("clawagent")
+    except Exception:
+        logo_text = "  clawagent"
+    left = Text(logo_text, style="bold green")
+
+    # ── Right column: info table ────────────────────────────────
+    table = Table(box=None, padding=(0, 2), show_header=False, show_edge=False)
+    table.add_column(style="dim", justify="right")
+    table.add_column(style="bold")
+    info_rows = [
+        ("Agent:", settings.agent_id),
+        ("Model:", settings.model_name),
+        ("Provider:", settings.model_provider or "auto"),
+        ("Context:", _format_tokens(settings.context_window)),
+        ("Max Tokens:", str(settings.max_tokens)),
+        ("Temperature:", str(settings.temperature)),
+        ("Compression:", settings.compression_strategy),
+        ("SubAgents:", str(len(worker_roles or []))),
+        ("RAG:", "enabled" if settings.siliconflow_api_key else "disabled"),
+    ]
+    for label, value in info_rows:
+        table.add_row(label, value)
+
+    # ── Assemble panel ──────────────────────────────────────────
+    panel = Panel(
+        Columns([left, table], padding=(0, 4), expand=False),
+        title="[bold]OWN ClawAgent[/bold]",
+        border_style="green",
+        padding=(1, 2),
     )
-    console.print(f"  [dim]{_format_cost(0)} · 0 msg · 0s[/dim]")
-    console.print()
+    console.print(panel)
+
+    # ── Welcome message ─────────────────────────────────────────
+    console.print("  欢迎使用 [bold green]Own ClawAgent[/bold green]，输入消息开始对话，输入 [bold]/help[/bold] 查看可用命令")
+    console.print("  [dim]✦ Tip: /model 切换模型 · /compress 调整压缩策略 · /sessions 查看历史会话[/dim]")
+
+    # ── Pool status ─────────────────────────────────────────────
+    if pool_stats:
+        for name, s in pool_stats.items():
+            active = s.get("active", 0)
+            total = s.get("total", 0)
+            console.print(f"  [dim]API Pool '{name}': {active}/{total} active[/dim]")
 
 
 # ── Status line ────────────────────────────────────────────────────────
@@ -139,11 +184,16 @@ def render_status_line(
     ctx_pct = stats.context_usage_pct(settings.context_window)
     cost = stats.cost(pricing)
 
+    # Visual context bar
+    bar_width = 10
+    filled = int(ctx_pct / 100 * bar_width)
+    bar = "█" * filled + "░" * (bar_width - filled)
+
     line = (
         f"[bold]R{stats.message_count + 1}[/bold]  "
         f"[dim]In {_format_tokens(stats.cumulative_input_tokens)}  "
         f"Out {_format_tokens(stats.cumulative_output_tokens)}  "
-        f"Ctx [{_context_color(ctx_pct)}]{ctx_pct:.1f}%[/]  "
+        f"Ctx [{_context_color(ctx_pct)}]{bar} {ctx_pct:.1f}%[/]  "
         f"{_format_duration(stats.elapsed_seconds)}  "
         f"{_format_cost(cost)}[/dim]"
     )

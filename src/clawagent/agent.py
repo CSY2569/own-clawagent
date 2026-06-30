@@ -181,6 +181,20 @@ class Usage:
         )
 
 
+def _extract_usage(msg: Any) -> Usage:
+    """Extract Usage from message, checking usage_metadata first (ChatAnthropic)."""
+    usage_dict = getattr(msg, "usage_metadata", None)
+    if usage_dict:
+        return Usage(
+            input_tokens=usage_dict.get("input_tokens", 0),
+            output_tokens=usage_dict.get("output_tokens", 0),
+            cache_read_input_tokens=usage_dict.get("cache_read_input_tokens", 0),
+            cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens", 0),
+        )
+    meta = getattr(msg, "response_metadata", None) or {}
+    return Usage.from_response_metadata(meta)
+
+
 @dataclass
 class AgentResponse:
     """Result of a single agent invocation."""
@@ -248,8 +262,7 @@ class Agent:
         messages = result["messages"]
         last_msg = messages[-1]
         text = _extract_text(last_msg.content)
-        metadata = getattr(last_msg, "response_metadata", None) or {}
-        usage = Usage.from_response_metadata(metadata)
+        usage = _extract_usage(last_msg)
 
         # Save messages to conversation log and ensure session is discoverable
         if self._db_path:
@@ -332,9 +345,9 @@ class Agent:
                                 tool_call_accum[tc_id]["args"] += args_piece
 
                     # ── Usage extraction ──
-                    meta = getattr(msg_chunk, "response_metadata", None) or {}
-                    if meta.get("usage"):
-                        usage = Usage.from_response_metadata(meta)
+                    chunk_usage = _extract_usage(msg_chunk)
+                    if chunk_usage.input_tokens > 0 or chunk_usage.output_tokens > 0:
+                        usage = chunk_usage
 
                 elif node == "tools":
                     if in_thinking:
@@ -369,7 +382,6 @@ class Agent:
 
         except Exception as e:
             yield StreamEvent(kind="error", content=f"{type(e).__name__}: {e}")
-            return
 
         # ── Usage fallback via get_state ──
         if usage.input_tokens == 0 and usage.output_tokens == 0:
@@ -378,10 +390,7 @@ class Agent:
                 if final_state and final_state.values:
                     msgs = final_state.values.get("messages", [])
                     if msgs:
-                        last = msgs[-1]
-                        meta = getattr(last, "response_metadata", None) or {}
-                        if meta.get("usage"):
-                            usage = Usage.from_response_metadata(meta)
+                        usage = _extract_usage(msgs[-1])
             except Exception:
                 pass
 

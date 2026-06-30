@@ -118,20 +118,16 @@ def main() -> None:
     console = Console()
     pricing = load_price_book().get(settings.model_name)
 
-    render_splash(settings, pricing, console)
-    if settings.siliconflow_api_key:
-        console.print("[dim]BM25 索引后台构建中，搜索将临时使用纯向量检索...[/dim]")
+    # Collect worker roles for splash display
+    from clawagent.worker.config import load_worker_configs
 
-    # Show pool status if configured
+    worker_configs = load_worker_configs()
+    worker_roles = list(worker_configs.keys())
+
     all_stats = pool.get_all_stats()
-    if all_stats:
-        parts = []
-        for name, s in all_stats.items():
-            active = s.get("active", 0)
-            total = s.get("total", 0)
-            parts.append(f"{name}({active}/{total} active)")
-        if parts:
-            console.print(f"[dim]API Key Pool: {', '.join(parts)}[/dim]")
+    render_splash(settings, pricing, console, pool_stats=all_stats, worker_roles=worker_roles)
+    if settings.siliconflow_api_key:
+        console.print("  [dim]BM25 索引后台构建中，搜索将临时使用纯向量检索...[/dim]")
 
     stats = ConversationStats(start_time=time.monotonic())
 
