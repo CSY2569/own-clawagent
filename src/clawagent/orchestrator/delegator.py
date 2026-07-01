@@ -38,7 +38,11 @@ def delegate_task(role: str, task: str) -> str:
     每次调用都是独立的临时 Agent，不会保留状态到下一次调用。
 
     Args:
-        role: Worker 角色名称，可选值: coder, researcher, critic, writer
+        role: Worker 角色名称，可选值及职责:
+            - coder: 编写/修改代码文件、运行命令、调试错误
+            - researcher: 搜索互联网获取最新信息（web_search）+ 搜索本地知识库（search_documents），适合查实时/新闻/技术动态
+            - critic: 审查代码质量、发现 bug、提供改进建议
+            - writer: 创作长文、小说、技术文档等内容
         task: 要交给 Worker 执行的具体任务描述（尽量详细）
 
     Returns:
