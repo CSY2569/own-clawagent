@@ -5,6 +5,7 @@ markdown files on disk, runtime metadata, SQLite user preferences,
 and auto-generated tool descriptions.
 """
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -62,8 +63,9 @@ class PromptBuilder:
             layers.append("\n\n".join(context_parts))
 
         # Layer 4: Runtime (always)
+        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
         layers.append(
-            f"## Runtime\nAgent: {agent_id}\nChannel: {source}"
+            f"## Runtime\nCurrent time: {now}\nAgent: {agent_id}\nChannel: {source}"
         )
 
         # Layer 5: User preferences from SQLite (optional)

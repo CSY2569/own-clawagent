@@ -18,7 +18,8 @@ dependencies = [
     "chromadb>=1.2.0",
     "jieba>=0.42.1,<1.0.0",
     "pyfiglet>=1.0.4",
-    "ddgs>=9.14.4",
+    "beautifulsoup4>=4.15.0",
+    "trafilatura>=2.1.0",
 ]
 
 [project.scripts]
