@@ -1,6 +1,7 @@
 """Agent creation and invocation logic."""
 
 import contextlib
+import os
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -14,6 +15,11 @@ from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
+
+try:
+    from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
+except ImportError:  # pragma: no cover
+    AnthropicPromptCachingMiddleware = None  # type: ignore
 
 # Ensure worker classes are registered before WorkerFactory is created
 import clawagent.worker.coder
@@ -32,6 +38,22 @@ from clawagent.tools.memory_tools import configure as _configure_memory_tools
 
 _PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
+_PROVIDER_KEY_ENV: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+}
+
+
+def _get_api_key(settings: Settings) -> str:
+    """Get API key for the current model provider from environment."""
+    env_var = _PROVIDER_KEY_ENV.get(settings.model_provider)
+    if env_var:
+        key = os.getenv(env_var, "")
+        if key:
+            return key
+    return settings.anthropic_api_key
+
 
 def _ensure_memory_dir(path: str) -> str:
     """Ensure the directory for the memory database exists."""
@@ -45,7 +67,7 @@ def _make_model(settings: Settings) -> Any:
     model = init_chat_model(
         model=settings.model_name,
         model_provider=settings.model_provider or None,
-        api_key=SecretStr(settings.anthropic_api_key),
+        api_key=SecretStr(_get_api_key(settings)),
         max_tokens=settings.max_tokens,
         temperature=settings.temperature,
     )
@@ -113,18 +135,29 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
 
     compression_config = _make_compression_config(settings)
 
+    middleware: list[Any] = []
+    if AnthropicPromptCachingMiddleware is not None:
+        middleware.append(
+            AnthropicPromptCachingMiddleware(
+                type="ephemeral",
+                ttl="5m",
+                unsupported_model_behavior="ignore",
+            )
+        )
+    middleware.append(
+        before_model(
+            lambda state, runtime: make_state_modifier(
+                config=compression_config, model=model
+            )(state)
+        )
+    )
+
     graph = _create_agent(
         model=model,
         tools=_make_all_tools(),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
-        middleware=[
-            before_model(
-                lambda state, runtime: make_state_modifier(
-                    config=compression_config, model=model
-                )(state)
-            )
-        ],
+        middleware=middleware,
     )
     return graph, conn
 
@@ -144,18 +177,29 @@ def rebuild_graph(
 
     compression_config = _make_compression_config(settings)
 
+    middleware: list[Any] = []
+    if AnthropicPromptCachingMiddleware is not None:
+        middleware.append(
+            AnthropicPromptCachingMiddleware(
+                type="ephemeral",
+                ttl="5m",
+                unsupported_model_behavior="ignore",
+            )
+        )
+    middleware.append(
+        before_model(
+            lambda state, runtime: make_state_modifier(
+                config=compression_config, model=model
+            )(state)
+        )
+    )
+
     return _create_agent(
         model=model,
         tools=_make_all_tools(),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
-        middleware=[
-            before_model(
-                lambda state, runtime: make_state_modifier(
-                    config=compression_config, model=model
-                )(state)
-            )
-        ],
+        middleware=middleware,
     )
 
 

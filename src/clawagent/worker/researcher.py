@@ -19,6 +19,6 @@ class ResearcherWorker(BaseWorker):
     """
 
     def _get_tools(self) -> list[Any]:
-        from clawagent.tools import get_current_time, search_documents
+        from clawagent.tools import search_documents
 
-        return [search_documents, get_current_time]
+        return [search_documents]

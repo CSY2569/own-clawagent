@@ -14,9 +14,9 @@ class CriticWorker(BaseWorker):
     """Code review, solution assessment, issue discovery. Read-only."""
 
     def _get_tools(self) -> list[Any]:
-        from clawagent.tools import get_current_time, read_file, search_documents
+        from clawagent.tools import read_file, search_documents
 
-        return [read_file, search_documents, get_current_time]
+        return [read_file, search_documents]
 
     def _customize_prompt(self, prompt: str, task: str) -> str:
         """Append review output format requirements."""

@@ -1,0 +1,12 @@
+# Price book — model pricing (CNY per 1M tokens)
+# Preferred format. price.txt is the legacy fallback.
+
+[deepseek-v4-flash]
+input_per_1m = 1.0
+cache_hit_per_1m = 0.02
+output_per_1m = 2.0
+
+[deepseek-v4-pro]
+input_per_1m = 3.0
+cache_hit_per_1m = 0.025
+output_per_1m = 6.0

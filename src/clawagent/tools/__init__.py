@@ -1,7 +1,6 @@
 """Tool definitions for the clawagent."""
 
 import subprocess
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +13,6 @@ __all__ = [
     "_PROJECT_ROOT",
     "_resolve_path",
     "configure_hybrid_search",
-    "get_current_time",
-    "greet",
     "list_sessions",
     "read_file",
     "recall_session",
@@ -38,22 +35,6 @@ def _resolve_path(path: str) -> Path:
     if not str(p).startswith(str(_PROJECT_ROOT)):
         raise ValueError(f"Path is outside the project directory: {path}")
     return p
-
-
-@tool
-def get_current_time() -> str:
-    """Return the current system time as an ISO 8601 string."""
-    return datetime.now().astimezone().isoformat()
-
-
-@tool
-def greet(name: str) -> str:
-    """Greet someone by name.
-
-    Args:
-        name: The name of the person to greet.
-    """
-    return f"Hello, {name}! Welcome to clawagent."
 
 
 @tool
@@ -147,6 +128,6 @@ def _get_memory_tools() -> list[Any]:
 
 # Registry of all tools available to the agent
 ALL_TOOLS = [
-    *[get_current_time, greet, read_file, write_file, run_command, search_documents],
+    *[read_file, write_file, run_command, search_documents],
     *_get_memory_tools(),
 ]

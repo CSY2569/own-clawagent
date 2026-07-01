@@ -2,6 +2,7 @@
 
 import os
 import re
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -94,27 +95,48 @@ class PriceBook:
 
 
 def load_price_book(price_path: str | Path | None = None) -> PriceBook:
-    """Parse price.txt and return a PriceBook.
+    """Parse price config and return a PriceBook.
 
-    Expected format (Chinese table from DeepSeek docs):
-
-        模型  deepseek-v4-flash  deepseek-v4-pro
-        百万tokens输入(缓存命中)  0.02元  0.025元
-        百万tokens输入(缓存未命中)  1元  3元
-        百万tokens输出  2元  6元
-
-    Args:
-        price_path: Path to price.txt. Defaults to PROJECT_ROOT/price.txt.
+    Prefers price.toml (TOML format). Falls back to price.txt (legacy).
     """
     if price_path is None:
-        price_path = _PROJECT_ROOT / "price.txt"
-    price_path = Path(price_path)
-    if not price_path.exists():
-        return PriceBook()
+        toml_path = _PROJECT_ROOT / "price.toml"
+        txt_path = _PROJECT_ROOT / "price.txt"
+    else:
+        price_path = Path(price_path)
+        if price_path.suffix == ".toml":
+            toml_path = price_path
+            txt_path = price_path.with_suffix(".txt")
+        else:
+            toml_path = price_path.with_suffix(".toml")
+            txt_path = price_path
 
-    text = price_path.read_text(encoding="utf-8")
+    if toml_path.exists():
+        return _load_price_toml(toml_path)
 
-    # Extract model names from first data row
+    if txt_path.exists():
+        return _load_price_txt(txt_path)
+
+    return PriceBook()
+
+
+def _load_price_toml(path: Path) -> PriceBook:
+    """Parse TOML-format price config."""
+    data = tomllib.loads(path.read_text("utf-8"))
+    models: dict[str, PriceConfig] = {}
+    for name, prices in data.items():
+        models[name] = PriceConfig(
+            input_per_1m=float(prices.get("input_per_1m", 0)),
+            cache_hit_per_1m=float(prices.get("cache_hit_per_1m", 0)),
+            output_per_1m=float(prices.get("output_per_1m", 0)),
+        )
+    return PriceBook(models=models)
+
+
+def _load_price_txt(path: Path) -> PriceBook:
+    """Parse legacy price.txt format (Chinese table from DeepSeek docs)."""
+    text = path.read_text(encoding="utf-8")
+
     model_match = re.search(
         r"^\s*模型\s+(deepseek[-_]\S+)\s+(deepseek[-_]\S+)",
         text,
@@ -125,8 +147,6 @@ def load_price_book(price_path: str | Path | None = None) -> PriceBook:
 
     model_a, model_b = model_match.group(1), model_match.group(2)
 
-    # Extract pricing values — each row has two tab-separated prices
-    # regex uses fullwidth parens to match price.txt content
     cache_hit = _extract_price(text, r"缓存命中[）)]?\s*([\d.]+)元\s+([\d.]+)元")
     cache_miss = _extract_price(text, r"缓存未命中[）)]?\s*([\d.]+)元\s+([\d.]+)元")
     output = _extract_price(text, r"百万tokens输出\s+([\d.]+)元\s+([\d.]+)元")
@@ -134,7 +154,7 @@ def load_price_book(price_path: str | Path | None = None) -> PriceBook:
     if len(cache_hit) < 2 or len(cache_miss) < 2 or len(output) < 2:
         return PriceBook()
 
-    models = {
+    return PriceBook(models={
         model_a: PriceConfig(
             input_per_1m=cache_miss[0],
             cache_hit_per_1m=cache_hit[0],
@@ -145,8 +165,7 @@ def load_price_book(price_path: str | Path | None = None) -> PriceBook:
             cache_hit_per_1m=cache_hit[1],
             output_per_1m=output[1],
         ),
-    }
-    return PriceBook(models=models)
+    })
 
 
 def _extract_price(text: str, pattern: str) -> list[float]:

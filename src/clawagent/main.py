@@ -17,6 +17,7 @@ from rich.table import Table
 from clawagent.agent import Agent, Usage, create_agent
 from clawagent.api_pool import init_global_pool
 from clawagent.config import _PROJECT_ROOT, PriceConfig, Settings, load_price_book
+from clawagent.conversation_log import ConversationLogger
 from clawagent.memory.summarizer import load_messages
 from clawagent.orchestrator.delegator import update_worker_settings
 from clawagent.tools.memory_tools import list_sessions as _list_sessions_tool
@@ -67,6 +68,9 @@ def main() -> None:
 
     graph, conn = create_agent(settings)
     agent_ref: dict[str, Agent] = {"agent": Agent(graph, db_path=settings.memory_db_path, conn=conn)}
+
+    logger = ConversationLogger()
+    logger.log_session_start(agent_ref["agent"].thread_id, settings)
 
     # Signal: BM25 background build completed (one-shot hint in REPL)
     _bm25_ready_signal: list[bool] = []
@@ -157,30 +161,59 @@ def main() -> None:
 
             # Handle slash commands
             if user_input.startswith("/"):
-                settings, pricing = _handle_command(user_input, agent_ref, settings, console, stats, pricing)
+                settings, pricing = _handle_command(user_input, agent_ref, settings, console, stats, pricing, logger)
                 continue
 
             try:
+                response_text = ""
+                round_usage = Usage()
                 with stream_display() as display:
                     for event in agent_ref["agent"].stream_events(user_input):
                         display.handle(event)
                         if event.kind == "done":
-                            stats.update(
-                                Usage(
-                                    input_tokens=event.metadata.get("input_tokens", 0),
-                                    output_tokens=event.metadata.get("output_tokens", 0),
-                                    cache_read_input_tokens=event.metadata.get("cache_read_input_tokens", 0),
-                                    cache_creation_input_tokens=event.metadata.get("cache_creation_input_tokens", 0),
-                                )
+                            response_text = event.content
+                            round_usage = Usage(
+                                input_tokens=event.metadata.get("input_tokens", 0),
+                                output_tokens=event.metadata.get("output_tokens", 0),
+                                cache_read_input_tokens=event.metadata.get("cache_read_input_tokens", 0),
+                                cache_creation_input_tokens=event.metadata.get("cache_creation_input_tokens", 0),
                             )
+                            stats.update(round_usage)
+                logger.log_turn(
+                    agent_ref["agent"].thread_id,
+                    stats.message_count,
+                    user_input,
+                    response_text,
+                    round_usage,
+                    settings,
+                )
             except Exception:
                 console.print("\n[red]Streaming error, falling back to non-streaming mode...[/red]")
                 response = agent_ref["agent"].run(user_input)
                 stats.update(response.usage)
                 console.print(f"\n[bold blue]Agent:[/bold blue] {response.text}")
+                logger.log_turn(
+                    agent_ref["agent"].thread_id,
+                    stats.message_count,
+                    user_input,
+                    response.text,
+                    response.usage,
+                    settings,
+                    error="streaming_error",
+                )
     except (EOFError, KeyboardInterrupt):
         console.print("\nGoodbye!")
     finally:
+        logger.log_session_end(
+            agent_ref["agent"].thread_id,
+            stats.message_count,
+            Usage(
+                input_tokens=stats.cumulative_input_tokens,
+                output_tokens=stats.cumulative_output_tokens,
+                cache_read_input_tokens=stats.cumulative_cache_read_tokens,
+                cache_creation_input_tokens=stats.cumulative_cache_creation_tokens,
+            ),
+        )
         conn.close()
 
 
@@ -191,6 +224,7 @@ def _handle_command(
     console: Console,
     stats: ConversationStats,
     pricing: PriceConfig,
+    logger: ConversationLogger,
 ) -> tuple[Settings, PriceConfig]:
     """Handle slash commands in interactive mode."""
     cmd = cmd.lower()
@@ -201,7 +235,7 @@ def _handle_command(
     elif cmd.startswith("/load "):
         _load_session(cmd[6:].strip(), agent, settings, console)
     elif cmd == "/new":
-        _new_session(agent_ref, settings, console, stats)
+        _new_session(agent_ref, settings, console, stats, logger)
     elif cmd.startswith("/model "):
         model_name = cmd[7:].strip()
         try:
@@ -209,6 +243,7 @@ def _handle_command(
             agent.reconfigure(new_settings)
             update_worker_settings(new_settings)
             new_pricing = load_price_book().get(model_name)
+            logger.log_settings_change(agent.thread_id, "model_name", settings.model_name, model_name)
             console.print(f"[green]模型已切换至: {model_name}[/green]")
             return new_settings, new_pricing
         except Exception as e:
@@ -223,6 +258,7 @@ def _handle_command(
         new_settings = replace(settings, temperature=temp)
         agent.reconfigure(new_settings)
         update_worker_settings(new_settings)
+        logger.log_settings_change(agent.thread_id, "temperature", settings.temperature, temp)
         console.print(f"[green]温度已设置为: {temp}[/green]")
         return new_settings, pricing
     elif cmd.startswith("/max-tokens "):
@@ -234,6 +270,7 @@ def _handle_command(
         new_settings = replace(settings, max_tokens=max_tok)
         agent.reconfigure(new_settings)
         update_worker_settings(new_settings)
+        logger.log_settings_change(agent.thread_id, "max_tokens", settings.max_tokens, max_tok)
         console.print(f"[green]最大输出 token 数已设置为: {max_tok}[/green]")
         return new_settings, pricing
     elif cmd == "/settings":
@@ -255,6 +292,7 @@ def _handle_command(
         new_settings = replace(settings, compression_strategy=strategy)
         agent.reconfigure(new_settings)
         update_worker_settings(new_settings)
+        logger.log_settings_change(agent.thread_id, "compression_strategy", settings.compression_strategy, strategy)
         console.print(f"[green]压缩策略已切换至: {strategy}[/green]")
         return new_settings, pricing
     elif cmd.startswith("/rag-search "):
@@ -349,12 +387,24 @@ def _new_session(
     settings: Settings,
     console: Console,
     stats: ConversationStats,
+    logger: ConversationLogger,
 ) -> None:
     """Create a new session and switch to it immediately."""
     old_agent = agent_ref["agent"]
+    logger.log_session_end(
+        old_agent.thread_id,
+        stats.message_count,
+        Usage(
+            input_tokens=stats.cumulative_input_tokens,
+            output_tokens=stats.cumulative_output_tokens,
+            cache_read_input_tokens=stats.cumulative_cache_read_tokens,
+            cache_creation_input_tokens=stats.cumulative_cache_creation_tokens,
+        ),
+    )
     old_agent.close()
 
     graph, conn = create_agent(settings)
     agent_ref["agent"] = Agent(graph, db_path=settings.memory_db_path, conn=conn)
+    logger.log_session_start(agent_ref["agent"].thread_id, settings)
     stats.reset()
     console.print(f"[bold green]已创建新会话: {agent_ref['agent'].thread_id}[/bold green]")

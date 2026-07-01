@@ -11,6 +11,6 @@ class WriterWorker(BaseWorker):
     """Write documentation, reports, and generated content."""
 
     def _get_tools(self) -> list[Any]:
-        from clawagent.tools import get_current_time, read_file, write_file
+        from clawagent.tools import read_file, write_file
 
-        return [read_file, write_file, get_current_time]
+        return [read_file, write_file]

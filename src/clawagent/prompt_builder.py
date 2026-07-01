@@ -5,7 +5,6 @@ markdown files on disk, runtime metadata, SQLite user preferences,
 and auto-generated tool descriptions.
 """
 
-from datetime import datetime
 from pathlib import Path
 
 
@@ -31,14 +30,10 @@ class PromptBuilder:
     def build(
         self,
         agent_id: str = "pickle",
-        timestamp: str | None = None,
         source: str = "cli",
         extra_context: str | None = None,
     ) -> str:
         """Assemble the full system prompt from all layers."""
-        if timestamp is None:
-            timestamp = datetime.now().astimezone().isoformat()
-
         layers: list[str] = []
 
         # Layer 1: Identity
@@ -68,7 +63,7 @@ class PromptBuilder:
 
         # Layer 4: Runtime (always)
         layers.append(
-            f"## Runtime\nAgent: {agent_id}\nTime: {timestamp}\nChannel: {source}"
+            f"## Runtime\nAgent: {agent_id}\nChannel: {source}"
         )
 
         # Layer 5: User preferences from SQLite (optional)
