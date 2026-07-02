@@ -1,6 +1,8 @@
 """Entry point for the clawagent CLI."""
 
+import queue
 import sys
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import replace
@@ -16,6 +18,7 @@ from rich.table import Table
 
 from clawagent.agent import Agent, Usage, create_agent
 from clawagent.api_pool import init_global_pool
+from clawagent.cancel_token import CancelToken
 from clawagent.config import _PROJECT_ROOT, PriceConfig, Settings, load_price_book
 from clawagent.conversation_log import ConversationLogger
 from clawagent.memory.summarizer import load_messages
@@ -142,6 +145,9 @@ def main() -> None:
         complete_while_typing=True,
     )
 
+    _current_worker: threading.Thread | None = None
+    _current_cancel: threading.Event | None = None
+
     try:
         while True:
             if _bm25_ready_signal:
@@ -167,8 +173,39 @@ def main() -> None:
             try:
                 response_text = ""
                 round_usage = Usage()
-                with stream_display() as display:
-                    for event in agent_ref["agent"].stream_events(user_input):
+                event_queue: queue.Queue = queue.Queue(maxsize=64)  # type: ignore[type-arg]
+                cancel_event = threading.Event()
+
+                def _produce(
+                    _user_input: str = user_input,
+                    _cancel_event: threading.Event = cancel_event,
+                    _event_queue: queue.Queue = event_queue,  # type: ignore[type-arg]
+                ) -> None:
+                    try:
+                        for event in agent_ref["agent"].stream_events(_user_input):
+                            if _cancel_event.is_set():
+                                return
+                            _event_queue.put(event, timeout=0.5)
+                    except queue.Full:
+                        pass
+                    except Exception:
+                        pass
+
+                worker = threading.Thread(target=_produce, daemon=True)
+                _current_worker = worker
+                _current_cancel = cancel_event
+                worker.start()
+
+                with CancelToken() as cancel, stream_display() as display:
+                    while True:
+                        try:
+                            event = event_queue.get(timeout=0.1)
+                        except queue.Empty:
+                            cancel.check()
+                            if not worker.is_alive() and event_queue.empty():
+                                break
+                            continue
+                        cancel.check()
                         display.handle(event)
                         if event.kind == "done":
                             response_text = event.content
@@ -179,15 +216,22 @@ def main() -> None:
                                 cache_creation_input_tokens=event.metadata.get("cache_creation_input_tokens", 0),
                             )
                             stats.update(round_usage)
-                logger.log_turn(
-                    agent_ref["agent"].thread_id,
-                    stats.message_count,
-                    user_input,
-                    response_text,
-                    round_usage,
-                    settings,
-                )
+                            break
+                if response_text:
+                    logger.log_turn(
+                        agent_ref["agent"].thread_id,
+                        stats.message_count,
+                        user_input,
+                        response_text,
+                        round_usage,
+                        settings,
+                    )
+            except KeyboardInterrupt:
+                cancel_event.set()
+                console.print("\n  [yellow]⏸ 已中断[/yellow]")
+                continue
             except Exception:
+                cancel_event.set()
                 console.print("\n[red]Streaming error, falling back to non-streaming mode...[/red]")
                 response = agent_ref["agent"].run(user_input)
                 stats.update(response.usage)
@@ -204,6 +248,10 @@ def main() -> None:
     except (EOFError, KeyboardInterrupt):
         console.print("\nGoodbye!")
     finally:
+        if _current_worker is not None and _current_worker.is_alive():
+            if _current_cancel is not None:
+                _current_cancel.set()
+            _current_worker.join(timeout=2.0)
         logger.log_session_end(
             agent_ref["agent"].thread_id,
             stats.message_count,

@@ -70,6 +70,7 @@ def _make_model(settings: Settings) -> Any:
         api_key=SecretStr(_get_api_key(settings)),
         max_tokens=settings.max_tokens,
         temperature=settings.temperature,
+        timeout=settings.request_timeout,
     )
 
     # Wrap with KeyPoolChatModel if a pool with keys is configured

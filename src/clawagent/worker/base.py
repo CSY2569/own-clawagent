@@ -92,7 +92,7 @@ class BaseWorker(ABC):
             "api_key": api_key,
             "max_tokens": self.config.max_tokens,
             "temperature": self.config.temperature,
-            "request_timeout": self.config.request_timeout,
+            "timeout": self.config.request_timeout,
         }
         if self.config.api_base:
             kwargs["base_url"] = self.config.api_base

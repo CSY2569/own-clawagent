@@ -34,7 +34,7 @@ class Settings:
     context_window: int = 1_000_000
     memory_db_path: str = "memories/sessions.db"
     max_preferences: int = 5
-    agent_id: str = "pickle"
+    agent_id: str = "wenbao"
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1/embeddings"
     siliconflow_model: str = "Qwen/Qwen3-VL-Embedding-8B"
@@ -43,6 +43,7 @@ class Settings:
     compression_max_messages: int = 40
     compression_max_tokens: int = 80_000
     compression_keep_recent: int = 6
+    request_timeout: int = 120
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -63,7 +64,7 @@ class Settings:
             context_window=context_window,
             memory_db_path=os.getenv("CLAWAGENT_MEMORY_DB", "memories/sessions.db"),
             max_preferences=int(os.getenv("CLAWAGENT_MAX_PREFERENCES", "5")),
-            agent_id=os.getenv("CLAWAGENT_AGENT_ID", "pickle"),
+            agent_id=os.getenv("CLAWAGENT_AGENT_ID", "wenbao"),
             siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY", ""),
             siliconflow_base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1/embeddings"),
             siliconflow_model=os.getenv("SILICONFLOW_MODEL", "Qwen/Qwen3-VL-Embedding-8B"),
@@ -72,6 +73,7 @@ class Settings:
             compression_max_messages=int(os.getenv("COMPRESSION_MAX_MESSAGES", "40")),
             compression_max_tokens=int(os.getenv("COMPRESSION_MAX_TOKENS", "80000")),
             compression_keep_recent=int(os.getenv("COMPRESSION_KEEP_RECENT", "6")),
+            request_timeout=int(os.getenv("CLAWAGENT_REQUEST_TIMEOUT", "120")),
         )
 
 

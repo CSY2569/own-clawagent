@@ -30,7 +30,7 @@ class PromptBuilder:
 
     def build(
         self,
-        agent_id: str = "pickle",
+        agent_id: str = "wenbao",
         source: str = "cli",
         extra_context: str | None = None,
     ) -> str:
