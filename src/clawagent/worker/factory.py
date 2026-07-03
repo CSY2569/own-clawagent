@@ -10,6 +10,7 @@ from clawagent.worker.registry import get_worker_class
 if TYPE_CHECKING:
     from clawagent.config import Settings
     from clawagent.worker.base import BaseWorker
+    from clawagent.worker.config import WorkerConfig
 
 
 class WorkerFactory:
@@ -20,11 +21,18 @@ class WorkerFactory:
     2. Look up the worker class by role
     3. Instantiate the worker with its config
     4. Track runtime settings for hot-reload support
+
+    Accepts an optional ``configs`` dict for web_ui or other external
+    config sources. When omitted, falls back to env vars + built-in defaults.
     """
 
-    def __init__(self) -> None:
-        self._configs = load_worker_configs()
+    def __init__(self, configs: dict[str, WorkerConfig] | None = None) -> None:
+        self._configs = configs if configs is not None else load_worker_configs()
         self._current_settings: Settings | None = None
+
+    def update_configs(self, configs: dict[str, WorkerConfig]) -> None:
+        """Replace all worker configs at runtime (web_ui hook)."""
+        self._configs = configs
 
     def set_settings(self, settings: Settings) -> None:
         """Update runtime settings for worker model hot-reload."""

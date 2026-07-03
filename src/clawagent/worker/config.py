@@ -49,11 +49,17 @@ def _env(key: str, default: str = "") -> str:
     return val.strip() or default
 
 
+# Built-in worker roles registered in the system.
+# web_ui can read this constant to generate default configuration forms.
+BUILTIN_WORKER_ROLES: tuple[str, ...] = ("coder", "researcher", "critic", "writer")
+
+
 def load_worker_configs() -> dict[str, WorkerConfig]:
     """Load all worker configurations from environment variables.
 
     Each worker reads WORKER_{ROLE}_{KEY}, falling back to WORKER_COMMON_{KEY}.
     Automatically discovers roles from WORKER_{ROLE}_MODEL vars.
+    Falls back to BUILTIN_WORKER_ROLES when no env vars are set.
     """
     # Discover worker roles from env vars matching WORKER_*_MODEL
     roles: set[str] = set()
@@ -67,7 +73,7 @@ def load_worker_configs() -> dict[str, WorkerConfig]:
                     break
 
     if not roles:
-        return {}
+        roles = set(BUILTIN_WORKER_ROLES)
 
     configs: dict[str, WorkerConfig] = {}
     for role in sorted(roles):
