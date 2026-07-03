@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import sqlite3
-from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, ClassVar
 from uuid import uuid4
 
 from langchain.agents import create_agent
@@ -16,13 +16,24 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.config import Settings
 from clawagent.prompt_builder import PromptBuilder
-from clawagent.worker.config import WorkerConfig
-
-if TYPE_CHECKING:
-    from clawagent.agent import Agent
+from clawagent.worker.config import _WORKER_TOOL_MAP, WORKER_TOOLS, WorkerConfig
 
 
-class BaseWorker(ABC):
+def _resolve_tools(tool_names: list[str]) -> list[Any]:
+    """Resolve tool name strings to actual tool objects via lazy import."""
+    tools: list[Any] = []
+    for name in tool_names:
+        module_path = _WORKER_TOOL_MAP.get(name)
+        if module_path is None:
+            continue
+        module = importlib.import_module(module_path)
+        tool = getattr(module, name, None)
+        if tool is not None:
+            tools.append(tool)
+    return tools
+
+
+class BaseWorker:
     """Worker base class.
 
     Each worker instance = a temporary Agent with:
@@ -32,19 +43,30 @@ class BaseWorker(ABC):
     - Independent SQLite memory database
     - Independent thread_id
 
-    Subclasses implement _get_tools() to return tool list,
-    and optionally _customize_prompt() to adjust the prompt.
+    Subclasses may define _TOOLS class attribute to declare their tool list.
+    If _TOOLS is empty, tools are resolved from WORKER_TOOLS config by role name.
     """
+
+    _agent_class: ClassVar[Any | None] = None
+
+    @classmethod
+    def set_agent_class(cls, agent_cls: Any) -> None:
+        """Inject Agent class reference to break circular import with agent.py."""
+        cls._agent_class = agent_cls
 
     def __init__(self, config: WorkerConfig) -> None:
         self.config = config
         self._agent: Any = None
         self._conn: sqlite3.Connection | None = None
 
-    @abstractmethod
     def _get_tools(self) -> list[Any]:
-        """Subclasses return the tool list available to this worker."""
-        ...
+        """Return the tool list for this worker.
+
+        Resolves from _TOOLS class attribute first, falls back to
+        WORKER_TOOLS config by role name.
+        """
+        tool_names = getattr(self, "_TOOLS", None) or WORKER_TOOLS.get(self.config.role, [])
+        return _resolve_tools(tool_names)
 
     def _customize_prompt(self, prompt: str, task: str, prompts_dir: str = "") -> str:
         """Subclasses may override to inject additional context into the prompt.
@@ -80,7 +102,7 @@ class BaseWorker(ABC):
         )
         return self._customize_prompt(base_prompt, task, prompts_dir)
 
-    def spawn(self, task: str, settings: Settings | None = None) -> Agent:
+    def spawn(self, task: str, settings: Settings | None = None) -> Any:
         """Create a worker agent instance.
 
         Each call creates a fresh Agent with independent:
@@ -91,7 +113,10 @@ class BaseWorker(ABC):
 
         Returns the Agent wrapper (not a CompiledStateGraph).
         """
-        from clawagent.agent import Agent
+        if self._agent_class is None:
+            raise RuntimeError(
+                "Agent class not injected. Call BaseWorker.set_agent_class() during startup."
+            )
 
         if settings is None:
             settings = Settings.from_env()
@@ -140,15 +165,17 @@ class BaseWorker(ABC):
             system_prompt=sys_prompt,
         )
 
-        agent = Agent(graph=graph, db_path=db_path, conn=conn, default_thread_id=uuid4().hex[:8])
+        agent = self._agent_class(
+            graph=graph, db_path=db_path, conn=conn, default_thread_id=uuid4().hex[:8]
+        )
         self._agent = agent
         return agent
 
-    def run(self, task: str) -> str:
+    def run(self, task: str) -> Any:
         """Create worker → execute task → return result. Cleans up after."""
-        agent = self.spawn(task)
+        agent: Any = self.spawn(task)
         try:
-            response = agent.run(task)
+            response: Any = agent.run(task)
             return response.text
         finally:
             self.cleanup()

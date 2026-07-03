@@ -1,6 +1,6 @@
 """WriterWorker — documentation and content creation specialist."""
 
-from typing import Any
+from typing import ClassVar
 
 from clawagent.worker.base import BaseWorker
 from clawagent.worker.registry import register_worker
@@ -10,7 +10,4 @@ from clawagent.worker.registry import register_worker
 class WriterWorker(BaseWorker):
     """Write documentation, reports, and generated content."""
 
-    def _get_tools(self) -> list[Any]:
-        from clawagent.tools import read_file, write_file
-
-        return [read_file, write_file]
+    _TOOLS: ClassVar[list[str]] = ["read_file", "write_file"]

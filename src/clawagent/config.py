@@ -9,12 +9,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Project root directory (own-clawagent/)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _load_env() -> None:
     """Load .env from project root."""
-    env_path = _PROJECT_ROOT / ".env"
+    env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
         load_dotenv(env_path)
 
@@ -102,8 +102,8 @@ def load_price_book(price_path: str | Path | None = None) -> PriceBook:
     Prefers price.toml (TOML format). Falls back to price.txt (legacy).
     """
     if price_path is None:
-        toml_path = _PROJECT_ROOT / "price.toml"
-        txt_path = _PROJECT_ROOT / "price.txt"
+        toml_path = PROJECT_ROOT / "price.toml"
+        txt_path = PROJECT_ROOT / "price.txt"
     else:
         price_path = Path(price_path)
         if price_path.suffix == ".toml":

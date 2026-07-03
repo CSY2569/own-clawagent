@@ -1,5 +1,6 @@
 """CLI dashboard for the clawagent interactive REPL."""
 
+import contextlib
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -126,10 +127,9 @@ def render_splash(
     console.print()
 
     # ── Left column: ASCII logo ─────────────────────────────────
-    try:
+    logo_text: str = "  clawagent"
+    with contextlib.suppress(Exception):
         logo_text = pyfiglet.Figlet(font="slant", width=30).renderText("clawagent")
-    except Exception:
-        logo_text = "  clawagent"
     left = Text(logo_text, style="bold green")
 
     # ── Right column: info table ────────────────────────────────

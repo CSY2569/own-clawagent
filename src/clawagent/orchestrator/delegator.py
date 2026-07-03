@@ -6,7 +6,7 @@ No module-level global state — the factory follows the Agent instance.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import tool
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from clawagent.worker.factory import WorkerFactory
 
 
-def make_delegate_task(factory: WorkerFactory):
+def make_delegate_task(factory: WorkerFactory) -> Any:
     """Create a delegate_task tool bound to *factory*.
 
     Returns a new @tool closure each call. Each Agent holds its own
@@ -48,7 +48,7 @@ def make_delegate_task(factory: WorkerFactory):
 
         try:
             agent = worker.spawn(task, settings=factory._current_settings)
-            result = agent.run(task).text
+            result: str = agent.run(task).text
             max_len = 50_000
             if len(result) > max_len:
                 result = result[:max_len] + f"\n\n...（结果已截断，共 {len(result)} 字符）"

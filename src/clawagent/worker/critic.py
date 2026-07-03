@@ -3,7 +3,7 @@
 Uses the qwen model via SiliconFlow chat API by default.
 """
 
-from typing import Any
+from typing import ClassVar
 
 from clawagent.worker.base import BaseWorker
 from clawagent.worker.registry import register_worker
@@ -13,7 +13,4 @@ from clawagent.worker.registry import register_worker
 class CriticWorker(BaseWorker):
     """Code review, solution assessment, issue discovery. Read-only."""
 
-    def _get_tools(self) -> list[Any]:
-        from clawagent.tools import read_file, search_documents
-
-        return [read_file, search_documents]
+    _TOOLS: ClassVar[list[str]] = ["read_file", "search_documents"]

@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from langchain_core.tools import BaseTool
+
 
 class PromptBuilder:
     """Build a system prompt by layering multiple sources.
@@ -34,7 +36,7 @@ class PromptBuilder:
         agent_id: str = "wenbao",
         source: str = "cli",
         extra_context: str | None = None,
-        delegate_tool: Any = None,  # type: ignore[no-untyped-def]
+        delegate_tool: BaseTool | None = None,
     ) -> str:
         """Assemble the full system prompt from all layers."""
         layers: list[str] = []
@@ -111,7 +113,7 @@ class PromptBuilder:
         return load_top_preferences(self._memory_db_path, self._max_preferences)
 
     @staticmethod
-    def _build_tools_section(delegate_tool: Any = None) -> str:  # type: ignore[no-untyped-def]
+    def _build_tools_section(delegate_tool: BaseTool | None = None) -> str:
         """Auto-generate the tools listing from ALL_TOOLS + optional delegate_task.
 
         Each @tool-decorated function has .name and .description,

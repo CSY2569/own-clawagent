@@ -32,7 +32,7 @@ class KeyPoolChatModel(BaseChatModel):
     The inner model must be a ChatAnthropic instance (Anthropic provider only).
     """
 
-    model_config: ClassVar[dict[str, Any]] = {"arbitrary_types_allowed": True}
+    model_config: ClassVar[dict[str, Any]] = {"arbitrary_types_allowed": True}  # type: ignore[assignment]
 
     pool: ApiKeyPool
     pool_name: str
@@ -63,7 +63,7 @@ class KeyPoolChatModel(BaseChatModel):
 
             counter = TokenCounter()
             try:
-                result = self.inner._generate(
+                result: ChatResult = self.inner._generate(
                     messages,
                     stop=stop,
                     run_manager=run_manager,

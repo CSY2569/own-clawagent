@@ -2,37 +2,36 @@
 
 import subprocess
 from pathlib import Path
-from typing import Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import BaseTool, tool
 
 from clawagent.tools.rag_tool import configure_hybrid_search, search_documents
+from clawagent.tools.web_search import web_search
 
 __all__ = [
     "ALL_TOOLS",
-    "_PROJECT_ROOT",
+    "PROJECT_ROOT",
     "_resolve_path",
     "configure_hybrid_search",
-    "list_sessions",
+    "create_memory_tools",
     "read_file",
-    "recall_session",
     "run_command",
     "search_documents",
-    "summarize_session",
+    "web_search",
     "write_file",
 ]
 
 # Project root for path-safe file operations
-from clawagent.config import _PROJECT_ROOT
+from clawagent.config import PROJECT_ROOT
 
 
 def _resolve_path(path: str) -> Path:
     """Resolve a path relative to project root and validate it's within bounds."""
     p = Path(path)
     if not p.is_absolute():
-        p = _PROJECT_ROOT / p
+        p = PROJECT_ROOT / p
     p = p.resolve()
-    if not str(p).startswith(str(_PROJECT_ROOT)):
+    if not str(p).startswith(str(PROJECT_ROOT)):
         raise ValueError(f"Path is outside the project directory: {path}")
     return p
 
@@ -102,7 +101,7 @@ def run_command(command: str) -> str:
             capture_output=True,
             text=True,
             timeout=120,
-            cwd=str(_PROJECT_ROOT),
+            cwd=str(PROJECT_ROOT),
         )
     except subprocess.TimeoutExpired:
         return f"Command timed out after 120s: {command}"
@@ -116,18 +115,7 @@ def run_command(command: str) -> str:
     return output
 
 
-# Lazy imports to avoid circular dependencies
-def _get_memory_tools() -> list[Any]:
-    from clawagent.tools.memory_tools import (
-        list_sessions,
-        recall_session,
-        summarize_session,
-    )
-    return [list_sessions, recall_session, summarize_session]
-
-
-# Registry of all tools available to the agent
-ALL_TOOLS = [
+# Registry of base tools (memory tools are created via create_memory_tools in agent.py)
+ALL_TOOLS: list[BaseTool] = [
     *[read_file, write_file, run_command, search_documents],
-    *_get_memory_tools(),
 ]

@@ -4,21 +4,21 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-# Module-level state, set by main.py on startup
-_hybrid_searcher: Any = None
+# Mutable container for hybrid searcher — initialized by bootstrap_rag().
+# Using a list avoids the `global` keyword while allowing late injection.
+_searcher: list[Any] = [None]
 
 
 def configure_hybrid_search(searcher: Any) -> None:
-    """Set the module-level hybrid searcher for use by search_documents."""
-    global _hybrid_searcher
-    _hybrid_searcher = searcher
+    """Set the hybrid searcher for use by search_documents (called by bootstrap_rag)."""
+    _searcher[0] = searcher
 
 
 def search_rag(query: str, top_k: int = 5) -> list[dict[str, str]]:
     """Search the RAG store via hybrid search and return raw hits (for CLI use)."""
-    if _hybrid_searcher is None:
+    if _searcher[0] is None:
         return []
-    return _hybrid_searcher.search(query, top_k=top_k)  # type: ignore[no-any-return]
+    return _searcher[0].search(query, top_k=top_k)  # type: ignore[no-any-return]
 
 
 @tool
@@ -34,10 +34,11 @@ def search_documents(query: str, top_k: int = 5) -> str:
         query: 搜索关键词或问题描述（中文直接用原句，英文关键词用空格分隔）。
         top_k: 返回条数（1-10，默认5）。
     """
-    if _hybrid_searcher is None:
+    searcher = _searcher[0]
+    if searcher is None:
         return "RAG 未初始化。请在 .env 中配置 SILICONFLOW_API_KEY。"
 
-    hits = _hybrid_searcher.search(query, top_k=top_k)
+    hits = searcher.search(query, top_k=top_k)
     if not hits:
         return (
             f"【未找到】关键词 \"{query}\" 在知识库中没有匹配结果。\n"

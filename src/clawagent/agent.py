@@ -6,12 +6,13 @@ import sqlite3
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain.agents import create_agent as _create_agent
 from langchain.agents.middleware import before_model
 from langchain.chat_models import init_chat_model
+from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
@@ -21,22 +22,21 @@ try:
 except ImportError:  # pragma: no cover
     AnthropicPromptCachingMiddleware = None  # type: ignore
 
-# Ensure worker classes are registered before WorkerFactory is created
-import clawagent.worker.coder
-import clawagent.worker.critic
-import clawagent.worker.researcher
-import clawagent.worker.writer  # noqa: F401
+import clawagent.worker  # noqa: F401  # ensures worker classes are registered
 from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.compression import CompressionConfig, make_state_modifier
-from clawagent.config import _PROJECT_ROOT, Settings
+from clawagent.config import PROJECT_ROOT, Settings
 from clawagent.memory.summarizer import ensure_session_entry
 from clawagent.memory.summarizer import save_messages as _save_messages
 from clawagent.prompt_builder import PromptBuilder
 from clawagent.stream_events import StreamEvent
 from clawagent.tools import ALL_TOOLS
-from clawagent.tools.memory_tools import configure as _configure_memory_tools
+from clawagent.tools.memory_tools import create_memory_tools
 
-_PROMPTS_DIR = _PROJECT_ROOT / "prompts"
+if TYPE_CHECKING:
+    from clawagent.worker.factory import WorkerFactory
+
+_PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 _PROVIDER_KEY_ENV: dict[str, str] = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -86,7 +86,7 @@ def _make_model(settings: Settings) -> Any:
     return model
 
 
-def _make_sys_prompt(settings: Settings, memory_db_path: str, delegate_tool: Any = None) -> str:
+def _make_sys_prompt(settings: Settings, memory_db_path: str, delegate_tool: BaseTool | None = None) -> str:
     """Build the system prompt from layered prompt files and preferences."""
     return PromptBuilder(
         prompts_dir=_PROMPTS_DIR,
@@ -95,9 +95,14 @@ def _make_sys_prompt(settings: Settings, memory_db_path: str, delegate_tool: Any
     ).build(agent_id=settings.agent_id, source="cli", delegate_tool=delegate_tool)
 
 
-def _make_all_tools(delegate_tool: Any) -> list[Any]:
-    """Return all tools including the given delegate_task closure."""
-    return [*ALL_TOOLS, delegate_tool]
+def _make_all_tools(delegate_tool: BaseTool | None, memory_tools: list[BaseTool] | None = None) -> list[BaseTool]:
+    """Return all tools including the given delegate_task closure and memory tools."""
+    tools: list[BaseTool] = [*ALL_TOOLS]
+    if delegate_tool is not None:
+        tools.append(delegate_tool)
+    if memory_tools:
+        tools.extend(memory_tools)
+    return tools
 
 
 def _make_compression_config(settings: Settings) -> CompressionConfig:
@@ -110,17 +115,41 @@ def _make_compression_config(settings: Settings) -> CompressionConfig:
     )
 
 
-def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.Connection]:
+def _build_middleware(compression_config: CompressionConfig, model: Any) -> list[Any]:
+    """Build middleware list: prompt caching + context compression."""
+    middleware: list[Any] = []
+    if AnthropicPromptCachingMiddleware is not None:
+        middleware.append(
+            AnthropicPromptCachingMiddleware(
+                type="ephemeral",
+                ttl="5m",
+                unsupported_model_behavior="ignore",
+            )
+        )
+    middleware.append(
+        before_model(
+            lambda state, runtime: make_state_modifier(
+                config=compression_config, model=model
+            )(state)
+        )
+    )
+    return middleware
+
+
+def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.Connection, WorkerFactory, BaseTool]:
     """Build a tool-calling ReAct agent backed by Anthropic Claude.
 
-    Returns (graph, db_connection) tuple. The caller must close the connection
-    when done.
+    Returns (graph, db_connection, worker_factory, delegate_tool) tuple.
+    The caller must close the connection when done.
     """
     model = _make_model(settings)
 
     # ─── Initialize WorkerFactory ────────────────────
     from clawagent.orchestrator.delegator import make_delegate_task
+    from clawagent.worker.base import BaseWorker
     from clawagent.worker.factory import WorkerFactory
+
+    BaseWorker.set_agent_class(Agent)
 
     factory = WorkerFactory()
     factory.set_settings(settings)
@@ -131,30 +160,14 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
     db_path = _ensure_memory_dir(settings.memory_db_path)
     conn = sqlite3.connect(db_path, check_same_thread=False)
 
-    _configure_memory_tools(db_path, model)
+    memory_tools = create_memory_tools(db_path, model)
 
     compression_config = _make_compression_config(settings)
-
-    middleware: list[Any] = []
-    if AnthropicPromptCachingMiddleware is not None:
-        middleware.append(
-            AnthropicPromptCachingMiddleware(
-                type="ephemeral",
-                ttl="5m",
-                unsupported_model_behavior="ignore",
-            )
-        )
-    middleware.append(
-        before_model(
-            lambda state, runtime: make_state_modifier(
-                config=compression_config, model=model
-            )(state)
-        )
-    )
+    middleware = _build_middleware(compression_config, model)
 
     graph = _create_agent(
         model=model,
-        tools=_make_all_tools(delegate_tool),
+        tools=_make_all_tools(delegate_tool, memory_tools),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
@@ -163,7 +176,7 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
 
 
 def rebuild_graph(
-    settings: Settings, db_path: str, conn: sqlite3.Connection, delegate_tool: Any
+    settings: Settings, db_path: str, conn: sqlite3.Connection, delegate_tool: BaseTool | None
 ) -> CompiledStateGraph[Any]:
     """Rebuild agent graph with new model settings, reusing existing DB connection.
 
@@ -173,30 +186,14 @@ def rebuild_graph(
     model = _make_model(settings)
     sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool)
 
-    _configure_memory_tools(db_path, model)
+    memory_tools = create_memory_tools(db_path, model)
 
     compression_config = _make_compression_config(settings)
-
-    middleware: list[Any] = []
-    if AnthropicPromptCachingMiddleware is not None:
-        middleware.append(
-            AnthropicPromptCachingMiddleware(
-                type="ephemeral",
-                ttl="5m",
-                unsupported_model_behavior="ignore",
-            )
-        )
-    middleware.append(
-        before_model(
-            lambda state, runtime: make_state_modifier(
-                config=compression_config, model=model
-            )(state)
-        )
-    )
+    middleware = _build_middleware(compression_config, model)
 
     return _create_agent(
         model=model,
-        tools=_make_all_tools(delegate_tool),
+        tools=_make_all_tools(delegate_tool, memory_tools),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
@@ -273,8 +270,8 @@ class Agent:
         db_path: str = "",
         conn: sqlite3.Connection | None = None,
         default_thread_id: str | None = None,
-        factory: Any = None,
-        delegate_tool: Any = None,
+        factory: WorkerFactory | None = None,
+        delegate_tool: BaseTool | None = None,
     ) -> None:
         self._graph = graph
         self._db_path = db_path
@@ -299,12 +296,31 @@ class Agent:
             self._factory.set_settings(settings)
         self._graph = rebuild_graph(settings, self._db_path, self._conn, self._delegate_tool)
 
+    def _persist_turn(self, thread_id: str, user_msg: str, assistant_msg: str) -> None:
+        """Save turn to conversation log, session index, and preference store."""
+        if not self._db_path or not assistant_msg:
+            return
+        with contextlib.suppress(Exception):
+            _save_messages(self._db_path, thread_id, [
+                ("user", user_msg), ("assistant", assistant_msg),
+            ])
+            ensure_session_entry(self._db_path, thread_id, user_msg)
+            from clawagent.memory.preferences import extract_preferences_from_messages
+            extract_preferences_from_messages(
+                messages_text=user_msg + "\n" + assistant_msg,
+                session_id=thread_id,
+                db_path=self._db_path,
+            )
+
     def close(self) -> None:
         """Release resources held by this agent, particularly the SQLite connection."""
+        from clawagent.memory.summarizer import close_all_cached
+
         if self._conn:
             with contextlib.suppress(Exception):
                 self._conn.close()
             self._conn = None
+        close_all_cached()
 
     def run(self, message: str, thread_id: str | None = None) -> AgentResponse:
         """Run the agent synchronously and return the response with usage."""
@@ -318,17 +334,7 @@ class Agent:
         text = _extract_text(last_msg.content)
         usage = _extract_usage(last_msg)
 
-        # Save messages to conversation log and ensure session is discoverable
-        if self._db_path:
-            with contextlib.suppress(Exception):
-                _save_messages(self._db_path, tid, [("user", message), ("assistant", text)])
-                ensure_session_entry(self._db_path, tid, message)
-                from clawagent.memory.preferences import extract_preferences_from_messages
-                extract_preferences_from_messages(
-                    messages_text=message + "\n" + text,
-                    session_id=tid,
-                    db_path=self._db_path,
-                )
+        self._persist_turn(tid, message, text)
 
         return AgentResponse(text=text, usage=usage)
 
@@ -450,20 +456,7 @@ class Agent:
 
         final_text = "".join(all_text)
 
-        # Persist conversation
-        if self._db_path and final_text:
-            with contextlib.suppress(Exception):
-                _save_messages(self._db_path, tid, [
-                    ("user", message),
-                    ("assistant", final_text),
-                ])
-                ensure_session_entry(self._db_path, tid, message)
-                from clawagent.memory.preferences import extract_preferences_from_messages
-                extract_preferences_from_messages(
-                    messages_text=message + "\n" + final_text,
-                    session_id=tid,
-                    db_path=self._db_path,
-                )
+        self._persist_turn(tid, message, final_text)
 
         yield StreamEvent(
             kind="done",

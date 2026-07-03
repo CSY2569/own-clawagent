@@ -1,7 +1,10 @@
 """BM25 lexical retriever with jieba tokenization."""
 
+import hashlib
 import logging
+import pickle
 from math import log
+from pathlib import Path
 
 import jieba  # type: ignore[import-untyped]
 
@@ -44,11 +47,16 @@ class BM25Retriever:
         """Whether the BM25 index has been built."""
         return self._ready
 
-    def build_async(self, corpus: list[str]) -> None:
-        """Build BM25 index from corpus. Called from a background thread."""
+    def build_async(self, corpus: list[str], cache_dir: str = "") -> None:
+        """Build BM25 index from corpus. Called from a background thread.
+
+        If cache_dir is provided, the index is persisted to disk after building.
+        """
         self._corpus = corpus
         self._build_index()
         self._ready = True
+        if cache_dir:
+            self.save_cache(cache_dir)
 
     def _tokenize(self, text: str) -> list[str]:
         """Tokenize text with jieba, dropping whitespace and pure-punctuation tokens."""
@@ -61,6 +69,10 @@ class BM25Retriever:
     def _build_index(self) -> None:
         """Build document frequency and term frequency indexes from corpus."""
         self._N = len(self._corpus)
+        self._doc_len.clear()
+        self._df.clear()
+        self._tf.clear()
+        self._idf.clear()
         if self._N == 0:
             return
         for doc_text in self._corpus:
@@ -79,6 +91,49 @@ class BM25Retriever:
             term: log((self._N - df + 0.5) / (df + 0.5) + 1)
             for term, df in self._df.items()
         }
+
+    def _corpus_hash(self, corpus: list[str]) -> str:
+        """SHA256 hash of corpus content for cache validation."""
+        h = hashlib.sha256()
+        for doc in corpus:
+            h.update(doc.encode("utf-8"))
+        return h.hexdigest()[:16]
+
+    def try_load_cache(self, cache_dir: str, corpus: list[str]) -> bool:
+        """Load BM25 index from disk cache. Returns True on success."""
+        cache_path = Path(cache_dir) / "bm25_index.pkl"
+        if not cache_path.exists():
+            return False
+        try:
+            data = pickle.loads(cache_path.read_bytes())
+            if data.get("hash") != self._corpus_hash(corpus):
+                return False
+            self._N = data["N"]
+            self._avgdl = data["avgdl"]
+            self._df = data["df"]
+            self._idf = data["idf"]
+            self._doc_len = data["doc_len"]
+            self._tf = data["tf"]
+            self._corpus = corpus
+            self._ready = True
+            return True
+        except Exception:
+            return False
+
+    def save_cache(self, cache_dir: str) -> None:
+        """Persist current BM25 index to disk."""
+        cache_path = Path(cache_dir) / "bm25_index.pkl"
+        data = {
+            "hash": self._corpus_hash(self._corpus),
+            "N": self._N,
+            "avgdl": self._avgdl,
+            "df": self._df,
+            "idf": self._idf,
+            "doc_len": self._doc_len,
+            "tf": self._tf,
+        }
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(pickle.dumps(data))
 
     def retrieve(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
         """Search corpus and return top_k (corpus_index, bm25_score) tuples.

@@ -32,6 +32,7 @@ class KeyPoolTransport(httpx.BaseTransport):
         self._pool_name = pool_name
         self._max_retries = max_retries
         self._current_key_api_key: str | None = None
+        self._current_key_record: Any = None
 
     def set_key(self, api_key: str) -> None:
         """Set the current key for header injection."""

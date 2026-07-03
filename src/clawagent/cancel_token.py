@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import signal
 from types import FrameType
+from typing import Any
 
 
 class CancelToken:
@@ -20,7 +21,7 @@ class CancelToken:
 
     def __init__(self) -> None:
         self._cancelled: bool = False
-        self._old_handler: object = signal.SIG_DFL
+        self._old_handler: Any = signal.SIG_DFL
 
     # ── Context manager ──────────────────────────────────────
 

@@ -1,8 +1,12 @@
 """Conversation summarization — generate and store session summaries."""
 
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
+
+_conn_cache: dict[str, sqlite3.Connection] = {}
+_cache_lock = threading.Lock()
 
 
 def _get_conn(db_path: str) -> sqlite3.Connection:
@@ -13,6 +17,24 @@ def _get_conn(db_path: str) -> sqlite3.Connection:
     _ensure_table(conn)
     _ensure_messages_table(conn)
     return conn
+
+
+def _get_cached_conn(db_path: str) -> sqlite3.Connection:
+    """Return a cached connection for db_path, creating one if needed."""
+    with _cache_lock:
+        if db_path not in _conn_cache:
+            conn = _get_conn(db_path)
+            conn.execute("PRAGMA journal_mode=WAL")
+            _conn_cache[db_path] = conn
+        return _conn_cache[db_path]
+
+
+def close_all_cached() -> None:
+    """Close all cached connections. Call on agent shutdown."""
+    with _cache_lock:
+        for conn in _conn_cache.values():
+            conn.close()
+        _conn_cache.clear()
 
 
 def _ensure_table(conn: sqlite3.Connection) -> None:
@@ -53,7 +75,7 @@ def save_summary(
     message_count: int,
 ) -> None:
     """Insert or update a session summary."""
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     conn.execute(
         """INSERT OR REPLACE INTO session_summaries
            (thread_id, title, summary, message_count, updated_at)
@@ -61,7 +83,6 @@ def save_summary(
         (thread_id, title, summary, message_count),
     )
     conn.commit()
-    conn.close()
 
 
 def get_summary(db_path: str, thread_id: str) -> dict[str, Any] | None:
@@ -69,11 +90,10 @@ def get_summary(db_path: str, thread_id: str) -> dict[str, Any] | None:
     path = Path(db_path)
     if not path.exists():
         return None
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     row = conn.execute(
         "SELECT * FROM session_summaries WHERE thread_id = ?", (thread_id,)
     ).fetchone()
-    conn.close()
     if row is None:
         return None
     return dict(row)
@@ -84,11 +104,10 @@ def list_summaries(db_path: str) -> list[dict[str, Any]]:
     path = Path(db_path)
     if not path.exists():
         return []
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     rows = conn.execute(
         "SELECT * FROM session_summaries ORDER BY updated_at DESC"
     ).fetchall()
-    conn.close()
     return [dict(r) for r in rows]
 
 
@@ -97,7 +116,7 @@ def list_thread_ids(db_path: str) -> list[dict[str, Any]]:
     path = Path(db_path)
     if not path.exists():
         return []
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     rows = conn.execute(
         """SELECT thread_id,
                   (SELECT content FROM conversation_messages cm2
@@ -109,13 +128,12 @@ def list_thread_ids(db_path: str) -> list[dict[str, Any]]:
            GROUP BY thread_id
            ORDER BY updated_at DESC"""
     ).fetchall()
-    conn.close()
     return [dict(r) for r in rows]
 
 
 def ensure_session_entry(db_path: str, thread_id: str, first_message: str) -> None:
     """Ensure a basic session summary entry exists (INSERT OR IGNORE)."""
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     conn.execute(
         """INSERT OR IGNORE INTO session_summaries
            (thread_id, title, summary, message_count)
@@ -123,7 +141,6 @@ def ensure_session_entry(db_path: str, thread_id: str, first_message: str) -> No
         (thread_id, first_message[:60], f"Session started: {first_message[:80]}"),
     )
     conn.commit()
-    conn.close()
 
 
 def save_messages(
@@ -138,13 +155,12 @@ def save_messages(
         thread_id: Session identifier.
         messages: List of (role, content) tuples.
     """
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     conn.executemany(
         "INSERT INTO conversation_messages (thread_id, role, content) VALUES (?, ?, ?)",
         [(thread_id, role, content) for role, content in messages],
     )
     conn.commit()
-    conn.close()
 
 
 def load_messages(db_path: str, thread_id: str) -> list[dict[str, Any]]:
@@ -152,13 +168,12 @@ def load_messages(db_path: str, thread_id: str) -> list[dict[str, Any]]:
     path = Path(db_path)
     if not path.exists():
         return []
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     rows = conn.execute(
         "SELECT role, content, created_at FROM conversation_messages "
         "WHERE thread_id = ? ORDER BY id",
         (thread_id,),
     ).fetchall()
-    conn.close()
     return [dict(r) for r in rows]
 
 

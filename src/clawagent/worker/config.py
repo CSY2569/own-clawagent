@@ -57,6 +57,24 @@ def _env(key: str, default: str = "") -> str:
 # web_ui can read this constant to generate default configuration forms.
 BUILTIN_WORKER_ROLES: tuple[str, ...] = ("coder", "researcher", "critic", "writer")
 
+# ── Tool configuration for built-in workers ────────────────────────
+# Maps tool name → import path so _resolve_tools() can lazy-load them.
+
+_WORKER_TOOL_MAP: dict[str, str] = {
+    "read_file": "clawagent.tools",
+    "write_file": "clawagent.tools",
+    "run_command": "clawagent.tools",
+    "search_documents": "clawagent.tools",
+    "web_search": "clawagent.tools.web_search",
+}
+
+WORKER_TOOLS: dict[str, list[str]] = {
+    "coder": ["read_file", "write_file", "run_command"],
+    "critic": ["read_file", "search_documents"],
+    "writer": ["read_file", "write_file"],
+    "researcher": ["search_documents", "web_search"],
+}
+
 
 def _resolve_prompts_dir(prefix: str) -> str:
     """Return the prompts directory for a worker role.
