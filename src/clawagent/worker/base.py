@@ -46,12 +46,24 @@ class BaseWorker(ABC):
         """Subclasses return the tool list available to this worker."""
         ...
 
-    def _customize_prompt(self, prompt: str, task: str) -> str:
+    def _customize_prompt(self, prompt: str, task: str, prompts_dir: str = "") -> str:
         """Subclasses may override to inject additional context into the prompt.
 
-        Default: append the task description at the end.
+        Default: load task-template.md if available, otherwise append the task.
         """
+        template = self._load_task_template(prompts_dir)
+        if template:
+            return f"{prompt}\n\n{template.format(task=task)}"
         return f"{prompt}\n\n## Current Task\n{task}"
+
+    def _load_task_template(self, prompts_dir: str) -> str | None:
+        """Load a role-specific task template file, returning None if absent."""
+        if not prompts_dir:
+            return None
+        path = Path(prompts_dir) / "agents" / self.config.role / "task-template.md"
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip()
+        return None
 
     def build_prompt(self, task: str) -> str:
         """Assemble the worker's system prompt."""
@@ -66,7 +78,7 @@ class BaseWorker(ABC):
             agent_id=self.config.role,
             source="worker",
         )
-        return self._customize_prompt(base_prompt, task)
+        return self._customize_prompt(base_prompt, task, prompts_dir)
 
     def spawn(self, task: str, settings: Settings | None = None) -> Agent:
         """Create a worker agent instance.

@@ -53,12 +53,22 @@ class PromptBuilder:
         bootstrap = self._read("shared/bootstrap.md")
         if bootstrap:
             context_parts.append(bootstrap)
-        agents_md = self._read("shared/agents.md")
-        if agents_md:
-            context_parts.append(agents_md)
+
+        # Workers don't need the agent roster (they can't delegate_task)
+        if source != "worker":
+            agents_md = self._read("shared/agents.md")
+            if agents_md:
+                context_parts.append(agents_md)
+
         search_rules = self._read("shared/search-rules.md")
         if search_rules:
             context_parts.append(search_rules)
+
+        # Role-specific context for workers (e.g. shared/worker-coder.md)
+        worker_ctx = self._read(f"shared/worker-{agent_id}.md")
+        if worker_ctx:
+            context_parts.append(worker_ctx)
+
         if context_parts:
             layers.append("\n\n".join(context_parts))
 
