@@ -6,19 +6,20 @@ A LangChain/LangGraph tool-calling agent powered by DeepSeek (via Anthropic-comp
 
 ## Features
 
-- **Tool-calling agent** — 7 built-in tools: file I/O, shell commands, conversation memory (list/recall/summarize), RAG document search, and multi-agent task delegation
-- **Multi-agent orchestration** — Orchestrator + 4 specialized Workers (Coder, Researcher, Critic, Writer). Complex tasks are decomposed and delegated via `delegate_task(role, task)`. Each Worker runs with an independent model, tool set, and prompt context
-- **Real-time streaming display** — Token-level typewriter effect with Rich Live dashboard. Tool calls and results are shown as they execute. Supports DeepSeek thinking blocks
+- **Tool-calling agent** — 8+ built-in tools: 4 core tools (file I/O, shell commands, RAG document search), 3 memory tools (list/recall/summarize sessions, closure-factory pattern), web search, and multi-agent task delegation
+- **Multi-agent orchestration** — Orchestrator + 4 specialized Workers (Coder, Researcher, Critic, Writer). Complex tasks are decomposed and delegated via `delegate_task(role, task)`. Each Worker runs with an independent model, tool set, and prompt context. Settings hot-reload propagates automatically to WorkerFactory
+- **Real-time streaming display** — Token-level typewriter effect with Rich Live dashboard. Tool calls and results are shown as they execute. Supports DeepSeek thinking blocks (`think_start` / `think_end`)
 - **Ctrl+C instant interrupt** — Threaded producer-consumer pattern ensures ≤100ms response to cancellation, with graceful background cleanup
 - **Web search** — Researcher Worker uses Bing direct search + trafilatura full-text extraction with concurrent page fetching
-- **RAG (Retrieval-Augmented Generation)** — Hybrid search: KNN vector retrieval (Chroma, SiliconFlow embeddings) + BM25 lexical matching (jieba tokenizer) fused via Reciprocal Rank Fusion. BM25 index builds in background for zero startup delay
+- **RAG (Retrieval-Augmented Generation)** — Hybrid search: KNN vector retrieval (Chroma, SiliconFlow embeddings) + BM25 lexical matching (jieba tokenizer) fused via Reciprocal Rank Fusion. BM25 index cache (SHA256-validated pickle) skips tokenization on restart when documents are unchanged
 - **API key pool** — Multi-key failover with exponential backoff per key. Supports `API_POOL_*` environment variables for automatic key rotation
 - **Multi-layer system prompt** — File-based assembly: identity, personality, workspace context, runtime metadata, user preferences, and auto-generated tool listing
-- **Conversation memory** — SQLite-backed session persistence with automatic summarization, user preference extraction, and JSONL logging per session
+- **Conversation memory** — SQLite-backed session persistence with automatic summarization, user preference extraction, and JSONL logging per session. Connection cache with WAL mode avoids repeated connect/disconnect within a turn
 - **Context compression** — 3 strategies: message-count trim, token-estimate trim, or LLM-based summarization
 - **Settings hot-reload** — Switch model, temperature, max tokens, and compression strategy without restart
 - **Interactive REPL** — Rich-powered dashboard with live token tracking, cost estimation, slash-command autocomplete, and streaming output
-- **304 passing tests** — Full coverage: agents, workers, tools, memory, RAG, compression, streaming, API pool, cancel token, and UI
+- **mypy zero errors** — Full strict-mode type checking across 50 source files
+- **327 passing tests** — Full coverage: agents, workers, tools, memory, RAG, compression, streaming, API pool, cancel token, and UI
 
 ## Quick Start
 
@@ -214,6 +215,9 @@ src/clawagent/
 ├── stream_events.py       # Stream event type definitions
 ├── cancel_token.py        # Ctrl+C cooperative cancellation
 ├── conversation_log.py    # Per-session JSONL logging
+├── cli/                   # CLI commands and display helpers
+│   ├── commands.py        #   Slash-command handling
+│   └── display.py         #   Session listing and formatting
 ├── api_pool/              # API key pool with failover
 │   ├── pool.py            #   ApiKeyPool core
 │   ├── loader.py          #   Environment variable loading
@@ -223,8 +227,9 @@ src/clawagent/
 │   └── callbacks.py       #   Streaming callback support
 ├── tools/
 │   ├── __init__.py        #   Core tools (read, write, shell, search)
-│   ├── memory_tools.py    #   Session list/recall/summarize
-│   └── rag_tool.py        #   RAG search_documents tool
+│   ├── memory_tools.py    #   Session list/recall/summarize (closure factory)
+│   ├── rag_tool.py        #   RAG search_documents tool
+│   └── web_search.py      #   Bing search + trafilatura extraction
 ├── memory/
 │   ├── summarizer.py      #   Session summarization & message persistence
 │   └── preferences.py     #   User preference extraction & querying
@@ -245,10 +250,11 @@ src/clawagent/
 │   ├── strategies.py      #   trim / token_trim / summarize
 │   └── counters.py        #   Token estimation
 └── rag/
+    ├── bootstrap.py       #   RAG system initialization + BM25 cache
     ├── embedding.py       #   SiliconFlow cloud embedding client
     ├── store.py           #   Chroma vector store
     ├── chunker.py         #   Fixed-window text chunking
-    ├── bm25.py            #   BM25 lexical retriever (jieba)
+    ├── bm25.py            #   BM25 lexical retriever (jieba) + pickle cache
     ├── hybrid.py          #   KNN + BM25 hybrid with RRF fusion
     └── ingest.py          #   Document ingestion CLI
 
@@ -262,7 +268,7 @@ prompts/
 │   └── search-rules.md
 └── README.md
 
-tests/                     # 304 tests
+tests/                     # 327 tests (22 files)
 ├── test_agent.py          # Agent wrapper (Usage, AgentResponse)
 ├── test_api_pool.py       # API key pool
 ├── test_cancel_token.py   # Ctrl+C cancellation
@@ -270,9 +276,10 @@ tests/                     # 304 tests
 ├── test_config.py         # Settings + price book
 ├── test_conversation_log.py
 ├── test_functional.py     # End-to-end agent graph integration
-├── test_memory_tools.py   # Memory tool interface
+├── test_memory_tools.py   # Memory tool interface (closure factory)
 ├── test_orchestrator.py   # delegate_task delegation
 ├── test_preferences.py    # User preference extraction
+├── test_rag.py            # RAG: chunker, BM25 (incl. cache), bootstrap
 ├── test_stream_events.py  # Stream events + UI display
 ├── test_streaming.py      # Streaming integration
 ├── test_summarizer.py     # Session summarization
@@ -298,14 +305,14 @@ uv run ruff check .
 # Format
 uv run ruff format .
 
-# Type check
-uv run mypy src/ tests/
+# Type check (0 errors, 50 source files)
+uv run mypy src/
 
-# Run tests (304 tests)
+# Run tests (327 tests)
 uv run pytest tests/ -v
 
 # Run specific test file
-uv run pytest tests/test_worker_registry.py -v
+uv run pytest tests/test_rag.py -v
 ```
 
 ## License

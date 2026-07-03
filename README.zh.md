@@ -6,19 +6,20 @@
 
 ## 功能特性
 
-- **工具调用 Agent** — 7 个内置工具：文件读写、Shell 命令、对话记忆（列出/回顾/摘要）、RAG 文档检索、多 Agent 任务委托
-- **多 Agent 协作** — Orchestrator + 4 个专业 Worker（Coder、Researcher、Critic、Writer）。复杂任务通过 `delegate_task(role, task)` 自动分解并委托执行，每个 Worker 拥有独立的模型、工具集和提示词上下文
-- **实时流式显示** — 逐 token 打字机效果 + Rich Live 仪表板。工具调用和结果实时显示。支持 DeepSeek 思考块检测
+- **工具调用 Agent** — 8+ 内置工具：4 个核心工具（文件读写、Shell 命令、RAG 文档检索）、3 个记忆工具（会话列出/回顾/摘要，闭包工厂模式）、联网搜索、多 Agent 任务委托
+- **多 Agent 协作** — Orchestrator + 4 个专业 Worker（Coder、Researcher、Critic、Writer）。复杂任务通过 `delegate_task(role, task)` 自动分解并委托执行，每个 Worker 拥有独立的模型、工具集和提示词上下文。设置热更新自动传播到 WorkerFactory
+- **实时流式显示** — 逐 token 打字机效果 + Rich Live 仪表板。工具调用和结果实时显示。支持 DeepSeek 思考块检测（`think_start` / `think_end`）
 - **Ctrl+C 即时中断** — 线程化 producer-consumer 模式，取消响应 ≤100ms，后台优雅清理
 - **联网搜索** — Researcher Worker 使用 Bing 直连搜索 + trafilatura 正文提取，并发抓取多页面
-- **RAG 混合检索** — KNN 向量检索（Chroma + SiliconFlow 嵌入）+ BM25 词法匹配（jieba 分词），通过 Reciprocal Rank Fusion 融合。BM25 索引后台构建，零启动延迟
+- **RAG 混合检索** — KNN 向量检索（Chroma + SiliconFlow 嵌入）+ BM25 词法匹配（jieba 分词），通过 Reciprocal Rank Fusion 融合。BM25 索引缓存（SHA256 校验 + pickle）在文档不变时跳过重启分词，秒级启动降至毫秒级
 - **API Key 池** — 多 Key 故障转移，每 Key 指数退避。支持 `API_POOL_*` 环境变量自动轮换
 - **多层系统提示词** — 基于文件的提示词拼装：身份、人格、工作区上下文、运行时元数据、用户偏好、工具列表自动生成
-- **对话记忆** — SQLite 持久化会话，自动摘要和用户偏好提取，按会话输出 JSONL 日志
+- **对话记忆** — SQLite 持久化会话，自动摘要和用户偏好提取，按会话输出 JSONL 日志。连接缓存 + WAL 模式避免同一 turn 内重复连接/断开
 - **上下文压缩** — 3 种策略：按消息数裁剪、按 token 估算裁剪、LLM 摘要压缩
 - **设置热更新** — 无需重启即可切换模型、temperature、最大输出 token、压缩策略
 - **交互式 REPL** — Rich 驱动仪表板，实时 token 用量和费用统计，斜杠命令自动补全，流式输出
-- **304 个测试通过** — 完整覆盖：Agent、Worker、工具、记忆、RAG、压缩、流式、API 池、取消令牌、UI
+- **mypy 零错误** — 50 个源文件全部通过严格模式类型检查
+- **327 个测试通过** — 完整覆盖：Agent、Worker、工具、记忆、RAG、压缩、流式、API 池、取消令牌、UI
 
 ## 快速开始
 
@@ -214,6 +215,9 @@ src/clawagent/
 ├── stream_events.py       # 流式事件类型定义
 ├── cancel_token.py        # Ctrl+C 协作式取消
 ├── conversation_log.py    # 按会话 JSONL 日志
+├── cli/                   # CLI 命令和显示辅助
+│   ├── commands.py        #   斜杠命令处理
+│   └── display.py         #   会话列表和格式化
 ├── api_pool/              # API Key 池 + 故障转移
 │   ├── pool.py            #   ApiKeyPool 核心
 │   ├── loader.py          #   环境变量加载
@@ -223,10 +227,11 @@ src/clawagent/
 │   └── callbacks.py       #   流式回调支持
 ├── tools/
 │   ├── __init__.py        #   核心工具（读写、Shell、搜索）
-│   ├── memory_tools.py    #   记忆工具（列出/回顾/摘要）
-│   └── rag_tool.py        #   RAG search_documents 工具
+│   ├── memory_tools.py    #   记忆工具（列出/回顾/摘要，闭包工厂）
+│   ├── rag_tool.py        #   RAG search_documents 工具
+│   └── web_search.py      #   Bing 搜索 + trafilatura 正文提取
 ├── memory/
-│   ├── summarizer.py      #   会话摘要与消息持久化
+│   ├── summarizer.py      #   会话摘要与消息持久化 + 连接缓存
 │   └── preferences.py     #   用户偏好提取与查询
 ├── orchestrator/
 │   └── delegator.py       #   delegate_task 工具（Worker 委托）
@@ -245,10 +250,11 @@ src/clawagent/
 │   ├── strategies.py      #   trim / token_trim / summarize
 │   └── counters.py        #   Token 估算
 └── rag/
+    ├── bootstrap.py       #   RAG 系统初始化 + BM25 缓存
     ├── embedding.py       #   SiliconFlow 云端嵌入客户端
     ├── store.py           #   Chroma 向量库
     ├── chunker.py         #   固定窗口文本分块
-    ├── bm25.py            #   BM25 词法检索（jieba）
+    ├── bm25.py            #   BM25 词法检索（jieba）+ pickle 缓存
     ├── hybrid.py          #   KNN + BM25 混合检索 + RRF 融合
     └── ingest.py          #   文档入库 CLI 脚本
 
@@ -262,6 +268,29 @@ prompts/
 │   └── search-rules.md
 └── README.md
 
+tests/                     # 327 个测试（22 个文件）
+├── test_agent.py          # Agent 包装器（Usage、AgentResponse）
+├── test_api_pool.py       # API Key 池
+├── test_cancel_token.py   # Ctrl+C 取消
+├── test_compression.py    # 上下文压缩
+├── test_config.py         # Settings + 价格表
+├── test_conversation_log.py
+├── test_functional.py     # 端到端 Agent 图集成
+├── test_memory_tools.py   # 记忆工具接口（闭包工厂）
+├── test_orchestrator.py   # delegate_task 委托
+├── test_preferences.py    # 用户偏好提取
+├── test_rag.py            # RAG：分块、BM25（含缓存）、启动
+├── test_stream_events.py  # 流式事件 + UI 显示
+├── test_streaming.py      # 流式集成
+├── test_summarizer.py     # 会话摘要
+├── test_tools.py          # 核心工具
+├── test_ui.py             # UI 统计/格式化
+├── test_web_search.py     # 联网搜索
+├── test_worker_base.py    # Worker 生命周期
+├── test_worker_config.py  # Worker 环境变量加载
+├── test_worker_factory.py # WorkerFactory
+├── test_worker_impl.py    # 各 Worker 行为
+└── test_worker_registry.py
 ```
 
 ## 开发
@@ -276,14 +305,14 @@ uv run ruff check .
 # 代码格式化
 uv run ruff format .
 
-# 类型检查
-uv run mypy src/ tests/
+# 类型检查（0 错误，50 个源文件）
+uv run mypy src/
 
-# 运行测试（304 个测试）
+# 运行测试（327 个测试）
 uv run pytest tests/ -v
 
 # 运行单文件测试
-uv run pytest tests/test_worker_registry.py -v
+uv run pytest tests/test_rag.py -v
 ```
 
 ## 许可证
