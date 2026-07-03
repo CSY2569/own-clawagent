@@ -86,20 +86,18 @@ def _make_model(settings: Settings) -> Any:
     return model
 
 
-def _make_sys_prompt(settings: Settings, memory_db_path: str) -> str:
+def _make_sys_prompt(settings: Settings, memory_db_path: str, delegate_tool: Any = None) -> str:
     """Build the system prompt from layered prompt files and preferences."""
     return PromptBuilder(
         prompts_dir=_PROMPTS_DIR,
         memory_db_path=memory_db_path,
         max_preferences=settings.max_preferences,
-    ).build(agent_id=settings.agent_id, source="cli")
+    ).build(agent_id=settings.agent_id, source="cli", delegate_tool=delegate_tool)
 
 
-def _make_all_tools() -> list[Any]:
-    """Return all tools including delegate_task for worker delegation."""
-    from clawagent.orchestrator.delegator import delegate_task
-
-    return [*ALL_TOOLS, delegate_task]
+def _make_all_tools(delegate_tool: Any) -> list[Any]:
+    """Return all tools including the given delegate_task closure."""
+    return [*ALL_TOOLS, delegate_tool]
 
 
 def _make_compression_config(settings: Settings) -> CompressionConfig:
@@ -119,20 +117,21 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
     when done.
     """
     model = _make_model(settings)
-    sys_prompt = _make_sys_prompt(settings, settings.memory_db_path)
+
+    # ─── Initialize WorkerFactory ────────────────────
+    from clawagent.orchestrator.delegator import make_delegate_task
+    from clawagent.worker.factory import WorkerFactory
+
+    factory = WorkerFactory()
+    factory.set_settings(settings)
+    delegate_tool = make_delegate_task(factory)
+
+    sys_prompt = _make_sys_prompt(settings, settings.memory_db_path, delegate_tool)
 
     db_path = _ensure_memory_dir(settings.memory_db_path)
     conn = sqlite3.connect(db_path, check_same_thread=False)
 
     _configure_memory_tools(db_path, model)
-
-    # ─── Initialize WorkerFactory ────────────────────
-    from clawagent.orchestrator.delegator import configure_worker_factory
-    from clawagent.worker.factory import WorkerFactory
-
-    factory = WorkerFactory()
-    factory.set_settings(settings)
-    configure_worker_factory(factory)
 
     compression_config = _make_compression_config(settings)
 
@@ -155,16 +154,16 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
 
     graph = _create_agent(
         model=model,
-        tools=_make_all_tools(),
+        tools=_make_all_tools(delegate_tool),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
     )
-    return graph, conn
+    return graph, conn, factory, delegate_tool
 
 
 def rebuild_graph(
-    settings: Settings, db_path: str, conn: sqlite3.Connection
+    settings: Settings, db_path: str, conn: sqlite3.Connection, delegate_tool: Any
 ) -> CompiledStateGraph[Any]:
     """Rebuild agent graph with new model settings, reusing existing DB connection.
 
@@ -172,7 +171,7 @@ def rebuild_graph(
     without losing conversation state stored in the checkpointer.
     """
     model = _make_model(settings)
-    sys_prompt = _make_sys_prompt(settings, db_path)
+    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool)
 
     _configure_memory_tools(db_path, model)
 
@@ -197,7 +196,7 @@ def rebuild_graph(
 
     return _create_agent(
         model=model,
-        tools=_make_all_tools(),
+        tools=_make_all_tools(delegate_tool),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
@@ -274,21 +273,31 @@ class Agent:
         db_path: str = "",
         conn: sqlite3.Connection | None = None,
         default_thread_id: str | None = None,
+        factory: Any = None,
+        delegate_tool: Any = None,
     ) -> None:
         self._graph = graph
         self._db_path = db_path
         self._conn = conn
         self._thread_id = default_thread_id or uuid4().hex[:8]
+        self._factory = factory
+        self._delegate_tool = delegate_tool
 
     @property
     def thread_id(self) -> str:
         return self._thread_id
 
     def reconfigure(self, settings: Settings) -> None:
-        """Hot-reload model settings without losing conversation state."""
+        """Hot-reload model settings without losing conversation state.
+
+        Also propagates settings to WorkerFactory so subsequently spawned
+        workers see the new configuration.
+        """
         if not self._conn:
             return
-        self._graph = rebuild_graph(settings, self._db_path, self._conn)
+        if self._factory is not None:
+            self._factory.set_settings(settings)
+        self._graph = rebuild_graph(settings, self._db_path, self._conn, self._delegate_tool)
 
     def close(self) -> None:
         """Release resources held by this agent, particularly the SQLite connection."""

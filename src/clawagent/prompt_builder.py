@@ -7,6 +7,7 @@ and auto-generated tool descriptions.
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 
 class PromptBuilder:
@@ -33,6 +34,7 @@ class PromptBuilder:
         agent_id: str = "wenbao",
         source: str = "cli",
         extra_context: str | None = None,
+        delegate_tool: Any = None,  # type: ignore[no-untyped-def]
     ) -> str:
         """Assemble the full system prompt from all layers."""
         layers: list[str] = []
@@ -85,7 +87,7 @@ class PromptBuilder:
             layers.append(f"## User Preferences\n{pref_text}")
 
         # Tools: auto-generated from ALL_TOOLS (always)
-        layers.append(self._build_tools_section())
+        layers.append(self._build_tools_section(delegate_tool))
 
         # Extra context (optional, e.g. RAG results)
         if extra_context:
@@ -109,17 +111,20 @@ class PromptBuilder:
         return load_top_preferences(self._memory_db_path, self._max_preferences)
 
     @staticmethod
-    def _build_tools_section() -> str:
-        """Auto-generate the tools listing from ALL_TOOLS + delegate_task.
+    def _build_tools_section(delegate_tool: Any = None) -> str:  # type: ignore[no-untyped-def]
+        """Auto-generate the tools listing from ALL_TOOLS + optional delegate_task.
 
         Each @tool-decorated function has .name and .description,
         so the list stays accurate as tools are added or removed.
         """
-        from clawagent.orchestrator.delegator import delegate_task
         from clawagent.tools import ALL_TOOLS  # lazy import, avoids circular deps
 
+        tools: list[Any] = [*ALL_TOOLS]
+        if delegate_tool is not None:
+            tools.append(delegate_tool)
+
         lines = ["## Available Tools"]
-        for t in [*ALL_TOOLS, delegate_task]:
+        for t in tools:
             name = getattr(t, "name", str(t))
             desc = getattr(t, "description", "")
             desc_short = desc.split("\n")[0] if desc else ""

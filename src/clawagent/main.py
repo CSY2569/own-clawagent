@@ -22,7 +22,6 @@ from clawagent.cancel_token import CancelToken
 from clawagent.config import _PROJECT_ROOT, PriceConfig, Settings, load_price_book
 from clawagent.conversation_log import ConversationLogger
 from clawagent.memory.summarizer import load_messages
-from clawagent.orchestrator.delegator import update_worker_settings
 from clawagent.tools.memory_tools import list_sessions as _list_sessions_tool
 from clawagent.tools.rag_tool import configure_hybrid_search, search_rag
 from clawagent.ui import ConversationStats, render_splash, render_status_line
@@ -69,8 +68,16 @@ def main() -> None:
     # Initialize API key pool (no-op if no API_POOL_* vars set)
     pool = init_global_pool()
 
-    graph, conn = create_agent(settings)
-    agent_ref: dict[str, Agent] = {"agent": Agent(graph, db_path=settings.memory_db_path, conn=conn)}
+    graph, conn, factory, delegate_tool = create_agent(settings)
+    agent_ref: dict[str, Agent] = {
+        "agent": Agent(
+            graph,
+            db_path=settings.memory_db_path,
+            conn=conn,
+            factory=factory,
+            delegate_tool=delegate_tool,
+        )
+    }
 
     logger = ConversationLogger()
     logger.log_session_start(agent_ref["agent"].thread_id, settings)
@@ -289,7 +296,6 @@ def _handle_command(
         try:
             new_settings = replace(settings, model_name=model_name)
             agent.reconfigure(new_settings)
-            update_worker_settings(new_settings)
             new_pricing = load_price_book().get(model_name)
             logger.log_settings_change(agent.thread_id, "model_name", settings.model_name, model_name)
             console.print(f"[green]模型已切换至: {model_name}[/green]")
@@ -305,7 +311,6 @@ def _handle_command(
             return settings, pricing
         new_settings = replace(settings, temperature=temp)
         agent.reconfigure(new_settings)
-        update_worker_settings(new_settings)
         logger.log_settings_change(agent.thread_id, "temperature", settings.temperature, temp)
         console.print(f"[green]温度已设置为: {temp}[/green]")
         return new_settings, pricing
@@ -317,7 +322,6 @@ def _handle_command(
             return settings, pricing
         new_settings = replace(settings, max_tokens=max_tok)
         agent.reconfigure(new_settings)
-        update_worker_settings(new_settings)
         logger.log_settings_change(agent.thread_id, "max_tokens", settings.max_tokens, max_tok)
         console.print(f"[green]最大输出 token 数已设置为: {max_tok}[/green]")
         return new_settings, pricing
@@ -339,7 +343,6 @@ def _handle_command(
             return settings, pricing
         new_settings = replace(settings, compression_strategy=strategy)
         agent.reconfigure(new_settings)
-        update_worker_settings(new_settings)
         logger.log_settings_change(agent.thread_id, "compression_strategy", settings.compression_strategy, strategy)
         console.print(f"[green]压缩策略已切换至: {strategy}[/green]")
         return new_settings, pricing
@@ -451,8 +454,14 @@ def _new_session(
     )
     old_agent.close()
 
-    graph, conn = create_agent(settings)
-    agent_ref["agent"] = Agent(graph, db_path=settings.memory_db_path, conn=conn)
+    graph, conn, factory, delegate_tool = create_agent(settings)
+    agent_ref["agent"] = Agent(
+        graph,
+        db_path=settings.memory_db_path,
+        conn=conn,
+        factory=factory,
+        delegate_tool=delegate_tool,
+    )
     logger.log_session_start(agent_ref["agent"].thread_id, settings)
     stats.reset()
     console.print(f"[bold green]已创建新会话: {agent_ref['agent'].thread_id}[/bold green]")
