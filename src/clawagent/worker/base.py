@@ -53,7 +53,7 @@ class BaseWorker(ABC):
         """
         template = self._load_task_template(prompts_dir)
         if template:
-            return f"{prompt}\n\n{template.format(task=task)}"
+            return f"{prompt}\n\n{template.replace('{task}', task)}"
         return f"{prompt}\n\n## Current Task\n{task}"
 
     def _load_task_template(self, prompts_dir: str) -> str | None:
