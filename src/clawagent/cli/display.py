@@ -104,6 +104,8 @@ def new_session(
             output_tokens=stats.cumulative_output_tokens,
             cache_read_input_tokens=stats.cumulative_cache_read_tokens,
             cache_creation_input_tokens=stats.cumulative_cache_creation_tokens,
+            prompt_cache_hit_tokens=stats.cumulative_cache_hit_tokens,
+            prompt_cache_miss_tokens=stats.cumulative_cache_miss_tokens,
         ),
     )
     old_agent.close()

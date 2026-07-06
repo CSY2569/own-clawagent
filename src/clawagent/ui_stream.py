@@ -138,7 +138,7 @@ class StreamDisplay:
             self._token_buffer = event.content
         self._stats["input_tokens"] = event.metadata.get("input_tokens", 0)
         self._stats["output_tokens"] = event.metadata.get("output_tokens", 0)
-        self._stats["cache_tokens"] = event.metadata.get("cache_read_input_tokens", 0) + event.metadata.get("cache_creation_input_tokens", 0)
+        self._stats["cache_tokens"] = event.metadata.get("prompt_cache_hit_tokens", 0) + event.metadata.get("prompt_cache_miss_tokens", 0)
         self._refresh()
 
     def _render(self) -> Group | Text:

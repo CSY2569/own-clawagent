@@ -26,6 +26,8 @@ class ConversationStats:
     cumulative_output_tokens: int = 0
     cumulative_cache_read_tokens: int = 0
     cumulative_cache_creation_tokens: int = 0
+    cumulative_cache_hit_tokens: int = 0
+    cumulative_cache_miss_tokens: int = 0
     latest_input_tokens: int = 0
     message_count: int = 0
     start_time: float = 0.0
@@ -36,6 +38,8 @@ class ConversationStats:
         self.cumulative_output_tokens += usage.output_tokens
         self.cumulative_cache_read_tokens += usage.cache_read_input_tokens
         self.cumulative_cache_creation_tokens += usage.cache_creation_input_tokens
+        self.cumulative_cache_hit_tokens += usage.prompt_cache_hit_tokens
+        self.cumulative_cache_miss_tokens += usage.prompt_cache_miss_tokens
         self.latest_input_tokens = usage.input_tokens
         self.message_count += 1
 
@@ -45,6 +49,8 @@ class ConversationStats:
         self.cumulative_output_tokens = 0
         self.cumulative_cache_read_tokens = 0
         self.cumulative_cache_creation_tokens = 0
+        self.cumulative_cache_hit_tokens = 0
+        self.cumulative_cache_miss_tokens = 0
         self.latest_input_tokens = 0
         self.message_count = 0
         self.start_time = time.monotonic()
@@ -69,7 +75,7 @@ class ConversationStats:
         """Total cost in CNY based on cumulative tokens."""
         return (
             (self.cumulative_input_tokens / 1_000_000) * pricing.input_per_1m
-            + (self.cumulative_cache_read_tokens / 1_000_000) * pricing.cache_hit_per_1m
+            + (self.cumulative_cache_hit_tokens / 1_000_000) * pricing.cache_hit_per_1m
             + (self.cumulative_output_tokens / 1_000_000) * pricing.output_per_1m
         )
 

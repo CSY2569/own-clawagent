@@ -35,6 +35,8 @@ def _usage_dict(usage: Usage) -> dict[str, int]:
         "output_tokens": usage.output_tokens,
         "cache_read_input_tokens": usage.cache_read_input_tokens,
         "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+        "prompt_cache_hit_tokens": usage.prompt_cache_hit_tokens,
+        "prompt_cache_miss_tokens": usage.prompt_cache_miss_tokens,
     }
 
 

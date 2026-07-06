@@ -176,6 +176,8 @@ def main() -> None:
                                 output_tokens=event.metadata.get("output_tokens", 0),
                                 cache_read_input_tokens=event.metadata.get("cache_read_input_tokens", 0),
                                 cache_creation_input_tokens=event.metadata.get("cache_creation_input_tokens", 0),
+                                prompt_cache_hit_tokens=event.metadata.get("prompt_cache_hit_tokens", 0),
+                                prompt_cache_miss_tokens=event.metadata.get("prompt_cache_miss_tokens", 0),
                             )
                             stats.update(round_usage)
                             break
@@ -222,6 +224,8 @@ def main() -> None:
                 output_tokens=stats.cumulative_output_tokens,
                 cache_read_input_tokens=stats.cumulative_cache_read_tokens,
                 cache_creation_input_tokens=stats.cumulative_cache_creation_tokens,
+                prompt_cache_hit_tokens=stats.cumulative_cache_hit_tokens,
+                prompt_cache_miss_tokens=stats.cumulative_cache_miss_tokens,
             ),
         )
         conn.close()
