@@ -51,5 +51,6 @@ venv/
 # Virtual environments
 .vscode/
 .omo/
+blog/
 
 .gitignore
