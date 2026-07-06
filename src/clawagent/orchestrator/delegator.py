@@ -47,7 +47,7 @@ def make_delegate_task(factory: WorkerFactory) -> Any:
             return f"错误: {e}"
 
         try:
-            agent = worker.spawn(task, settings=factory._current_settings)
+            agent = worker.spawn(task, settings=factory.get_settings())
             result: str = agent.run(task).text
             max_len = 50_000
             if len(result) > max_len:

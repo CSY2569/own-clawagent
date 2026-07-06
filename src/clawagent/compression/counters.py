@@ -1,21 +1,8 @@
 """Token estimation utilities for context compression."""
 
-from typing import Any
-
 from langchain_core.messages import BaseMessage
 
-
-def _extract_text(content: Any) -> str:
-    """Extract readable text from message content (handles str and list blocks)."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(str(block.get("text", "")))
-        return "\n".join(parts)
-    return str(content) if content is not None else ""
+from clawagent.utils import extract_text
 
 
 def estimate_tokens(messages: list[BaseMessage]) -> int:
@@ -31,7 +18,7 @@ def estimate_tokens(messages: list[BaseMessage]) -> int:
     """
     total = 0
     for msg in messages:
-        content = _extract_text(msg.content)
+        content = extract_text(msg.content)
         ascii_count = sum(1 for c in content if ord(c) < 128)
         non_ascii = len(content) - ascii_count
 

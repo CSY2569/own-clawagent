@@ -1,5 +1,7 @@
 """Preference extraction and querying from conversation history."""
 
+import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -125,8 +127,6 @@ def _extract_patterns_llm(text: str, model: Any) -> list[dict[str, Any]]:
     )
     try:
         response = model.invoke([SystemMessage(content=prompt)])
-        import json
-        import re
 
         content = response.content.strip()
         if content.startswith("```"):

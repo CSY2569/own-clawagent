@@ -38,6 +38,18 @@ class WorkerFactory:
         """Update runtime settings for worker model hot-reload."""
         self._current_settings = settings
 
+    def get_settings(self) -> Settings:
+        """Get current settings, falling back to environment if never set.
+
+        Always returns a valid Settings object.  Callers should use this
+        instead of accessing ``_current_settings`` directly so that workers
+        never receive ``None``.
+        """
+        if self._current_settings is not None:
+            return self._current_settings
+        from clawagent.config import Settings
+        return Settings.from_env()
+
     @property
     def available_roles(self) -> list[str]:
         """Return list of configured worker role names."""

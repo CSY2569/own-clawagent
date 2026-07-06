@@ -43,6 +43,7 @@ class Settings:
     compression_max_messages: int = 40
     compression_max_tokens: int = 80_000
     compression_keep_recent: int = 6
+    compression_summary_timeout: int = 30
     request_timeout: int = 120
 
     @classmethod
@@ -73,6 +74,7 @@ class Settings:
             compression_max_messages=int(os.getenv("COMPRESSION_MAX_MESSAGES", "40")),
             compression_max_tokens=int(os.getenv("COMPRESSION_MAX_TOKENS", "80000")),
             compression_keep_recent=int(os.getenv("COMPRESSION_KEEP_RECENT", "6")),
+            compression_summary_timeout=int(os.getenv("COMPRESSION_SUMMARY_TIMEOUT", "30")),
             request_timeout=int(os.getenv("CLAWAGENT_REQUEST_TIMEOUT", "120")),
         )
 

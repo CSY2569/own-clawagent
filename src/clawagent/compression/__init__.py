@@ -39,7 +39,8 @@ def compress_state(
         if model is None:
             raise ValueError("summarize strategy requires an LLM model reference")
         return summarize_by_llm(
-            messages, model, config.max_messages, config.keep_recent
+            messages, model, config.max_messages, config.keep_recent,
+            timeout=config.summary_timeout,
         )
     else:
         raise ValueError(f"Unknown compression strategy: {config.strategy}")

@@ -5,21 +5,9 @@ from typing import Any
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from clawagent.compression.counters import estimate_tokens
+from clawagent.utils import extract_text
 
 _SUMMARY_PREFIX = "[对话历史摘要]"
-
-
-def _safe_extract_text(content: object) -> str:
-    """Extract readable text from content that may be str, list[dict], or other."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-        return "\n".join(parts)
-    return str(content) if content is not None else ""
 
 
 def trim_by_count(
@@ -74,6 +62,7 @@ def summarize_by_llm(
     model: Any,
     max_messages: int = 40,
     keep_recent: int = 6,
+    timeout: int = 30,
 ) -> list[BaseMessage]:
     """Level 3: summarize overflow messages with LLM, keep recent ones intact.
 
@@ -115,13 +104,16 @@ def summarize_by_llm(
     if old_summary:
         summary_prompt += f"之前的对话摘要：{old_summary}\n\n后续对话：\n"
     summary_prompt += "\n".join(
-        f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {_safe_extract_text(m.content)[:500]}"
+        f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {extract_text(m.content)[:500]}"
         for m in to_summarize
     )
 
-    response = model.invoke([HumanMessage(content=summary_prompt)])
+    response = model.invoke(
+        [HumanMessage(content=summary_prompt)],
+        config={"timeout": timeout},
+    )
     content = response.content if hasattr(response, "content") else str(response)
-    summary_text = _safe_extract_text(content).strip()
+    summary_text = extract_text(content).strip()
 
     summary_msg = SystemMessage(content=f"{_SUMMARY_PREFIX} {summary_text}")
     return [*system_msgs, summary_msg, *to_keep]
