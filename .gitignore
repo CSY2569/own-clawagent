@@ -50,8 +50,6 @@ Thumbs.db
 venv/
 # Virtual environments
 .vscode/
-AGENTS.md
-知识清单.md
 .omo/
 
 .gitignore
