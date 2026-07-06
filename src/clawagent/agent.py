@@ -1,10 +1,11 @@
 """Agent creation and invocation logic."""
 
 import contextlib
+import json
 import os
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -32,6 +33,7 @@ from clawagent.prompt_builder import PromptBuilder
 from clawagent.stream_events import StreamEvent
 from clawagent.tools import ALL_TOOLS
 from clawagent.tools.memory_tools import create_memory_tools
+from clawagent.utils import extract_text
 
 if TYPE_CHECKING:
     from clawagent.worker.factory import WorkerFactory
@@ -112,6 +114,7 @@ def _make_compression_config(settings: Settings) -> CompressionConfig:
         max_messages=settings.compression_max_messages,
         max_tokens=settings.compression_max_tokens,
         keep_recent=settings.compression_keep_recent,
+        summary_timeout=settings.compression_summary_timeout,
     )
 
 
@@ -155,9 +158,9 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
     factory.set_settings(settings)
     delegate_tool = make_delegate_task(factory)
 
-    sys_prompt = _make_sys_prompt(settings, settings.memory_db_path, delegate_tool)
-
     db_path = _ensure_memory_dir(settings.memory_db_path)
+    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool)
+
     conn = sqlite3.connect(db_path, check_same_thread=False)
 
     memory_tools = create_memory_tools(db_path, model)
@@ -250,21 +253,88 @@ class AgentResponse:
     usage: Usage
 
 
-def _extract_text(content: Any) -> str:
-    """Extract readable text from an AI message content.
+@dataclass
+class _StreamState:
+    """Mutable state shared across stream event processors."""
 
-    Handles both plain strings and content blocks (e.g. DeepSeek's
-    thinking/text blocks in Anthropic API format).
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
-        return "\n".join(parts)
-    return str(content) if content is not None else ""
+    all_text: list[str] = field(default_factory=list)
+    tool_call_accum: dict[str, dict[str, str]] = field(default_factory=dict)
+    tool_calls_emitted: set[str] = field(default_factory=set)
+    in_thinking: bool = False
+    usage: Usage = field(default_factory=Usage)
+
+
+def _process_text_chunk(
+    chunk_text: object, state: _StreamState
+) -> Iterator[StreamEvent]:
+    """Process a text chunk from the agent/model node."""
+    if isinstance(chunk_text, list):
+        for block in chunk_text:
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type", "")
+            text = block.get("text", "") or block.get("thinking", "")
+            if btype == "thinking" and text:
+                if not state.in_thinking:
+                    state.in_thinking = True
+                    yield StreamEvent(kind="think_start")
+            elif btype == "text" and text:
+                if state.in_thinking:
+                    state.in_thinking = False
+                    yield StreamEvent(kind="think_end")
+                state.all_text.append(text)
+                yield StreamEvent(kind="token", node="agent", content=text)
+    elif isinstance(chunk_text, str) and chunk_text:
+        state.all_text.append(chunk_text)
+        yield StreamEvent(kind="token", node="agent", content=chunk_text)
+
+
+def _process_tool_call_chunks(msg_chunk: Any, state: _StreamState) -> None:
+    """Accumulate incremental tool call name/args chunks."""
+    tcc_list = getattr(msg_chunk, "tool_call_chunks", None)
+    if not tcc_list:
+        return
+    state.all_text.clear()
+    for tcc in tcc_list:
+        tc_id = tcc.get("id", "")
+        if not tc_id:
+            continue
+        if tc_id not in state.tool_call_accum:
+            state.tool_call_accum[tc_id] = {"name": "", "args": ""}
+        name_piece = tcc.get("name", "") or ""
+        args_piece = tcc.get("args", "") or ""
+        if name_piece:
+            state.tool_call_accum[tc_id]["name"] += name_piece
+        if args_piece:
+            state.tool_call_accum[tc_id]["args"] += args_piece
+
+
+def _emit_tool_events(
+    msg_chunk: Any, state: _StreamState
+) -> Iterator[StreamEvent]:
+    """Emit tool_call and tool_result events for a tools-node message."""
+    if state.in_thinking:
+        state.in_thinking = False
+        yield StreamEvent(kind="think_end")
+
+    for tc_id, acc in state.tool_call_accum.items():
+        if tc_id in state.tool_calls_emitted:
+            continue
+        name = acc["name"]
+        if not name:
+            continue
+        try:
+            args = json.loads(acc["args"]) if acc["args"] else {}
+        except (json.JSONDecodeError, ValueError):
+            args = {"raw": acc["args"]}
+        state.tool_calls_emitted.add(tc_id)
+        yield StreamEvent(kind="tool_call", node="agent", content=name,
+                          metadata={"args": args})
+
+    preview = str(getattr(msg_chunk, "content", ""))[:200]
+    yield StreamEvent(kind="tool_result", node="tools",
+                      content=getattr(msg_chunk, "name", ""),
+                      metadata={"preview": preview})
 
 
 class Agent:
@@ -285,6 +355,7 @@ class Agent:
         self._thread_id = default_thread_id or uuid4().hex[:8]
         self._factory = factory
         self._delegate_tool = delegate_tool
+        self._turn_count: int = 0
 
     @property
     def thread_id(self) -> str:
@@ -311,12 +382,15 @@ class Agent:
                 ("user", user_msg), ("assistant", assistant_msg),
             ])
             ensure_session_entry(self._db_path, thread_id, user_msg)
-            from clawagent.memory.preferences import extract_preferences_from_messages
-            extract_preferences_from_messages(
-                messages_text=user_msg + "\n" + assistant_msg,
-                session_id=thread_id,
-                db_path=self._db_path,
-            )
+
+            self._turn_count += 1
+            if self._turn_count % 5 == 1:
+                from clawagent.memory.preferences import extract_preferences_from_messages
+                extract_preferences_from_messages(
+                    messages_text=user_msg + "\n" + assistant_msg,
+                    session_id=thread_id,
+                    db_path=self._db_path,
+                )
 
     def close(self) -> None:
         """Release resources held by this agent, particularly the SQLite connection."""
@@ -337,7 +411,7 @@ class Agent:
         )
         messages = result["messages"]
         last_msg = messages[-1]
-        text = _extract_text(last_msg.content)
+        text = extract_text(last_msg.content)
         usage = _extract_usage(last_msg)
 
         self._persist_turn(tid, message, text)
@@ -347,19 +421,9 @@ class Agent:
     def stream_events(
         self, message: str, thread_id: str | None = None
     ) -> Iterator[StreamEvent]:
-        """Stream agent execution at message-chunk granularity.
-
-        Uses stream_mode="messages" for token-level typewriter effect.
-        Yields: think_start, think_end, token, tool_call, tool_result, error, done.
-        """
-        import json
-
+        """Stream agent execution at message-chunk granularity."""
         tid = thread_id or self._thread_id
-        all_text: list[str] = []
-        tool_call_accum: dict[str, dict[str, str]] = {}
-        usage = Usage()
-        in_thinking: bool = False
-        tool_calls_emitted: set[str] = set()
+        state = _StreamState()
 
         try:
             for msg_chunk, metadata in self._graph.stream(
@@ -370,109 +434,50 @@ class Agent:
                 node = metadata.get("langgraph_node", "") if isinstance(metadata, dict) else ""
 
                 if node in ("agent", "model"):
-                    # ── Text chunk ──
                     chunk_text = getattr(msg_chunk, "content", None)
                     if chunk_text:
-                        if isinstance(chunk_text, list):
-                            for block in chunk_text:
-                                if not isinstance(block, dict):
-                                    continue
-                                btype = block.get("type", "")
-                                text = block.get("text", "") or block.get("thinking", "")
-                                if btype == "thinking" and text:
-                                    if not in_thinking:
-                                        in_thinking = True
-                                        yield StreamEvent(kind="think_start")
-                                elif btype == "text" and text:
-                                    if in_thinking:
-                                        in_thinking = False
-                                        yield StreamEvent(kind="think_end")
-                                    all_text.append(text)
-                                    yield StreamEvent(kind="token", node="agent", content=text)
-                        elif isinstance(chunk_text, str) and chunk_text:
-                            all_text.append(chunk_text)
-                            yield StreamEvent(kind="token", node="agent", content=chunk_text)
+                        yield from _process_text_chunk(chunk_text, state)
+                    _process_tool_call_chunks(msg_chunk, state)
 
-                    # ── Tool call chunks (incremental) ──
-                    tcc_list = getattr(msg_chunk, "tool_call_chunks", None)
-                    if tcc_list:
-                        all_text.clear()  # C2: discard pre-tool filler text
-                        for tcc in tcc_list:
-                            tc_id = tcc.get("id", "")
-                            if not tc_id:
-                                continue
-                            if tc_id not in tool_call_accum:
-                                tool_call_accum[tc_id] = {"name": "", "args": ""}
-                            name_piece = tcc.get("name", "") or ""
-                            args_piece = tcc.get("args", "") or ""
-                            if name_piece:
-                                tool_call_accum[tc_id]["name"] += name_piece
-                            if args_piece:
-                                tool_call_accum[tc_id]["args"] += args_piece
-
-                    # ── Usage extraction ──
                     chunk_usage = _extract_usage(msg_chunk)
                     if chunk_usage.input_tokens > 0 or chunk_usage.output_tokens > 0:
-                        usage = chunk_usage
+                        state.usage = chunk_usage
 
                 elif node == "tools":
-                    if in_thinking:
-                        in_thinking = False
-                        yield StreamEvent(kind="think_end")
-
-                    for tc_id, acc in tool_call_accum.items():
-                        if tc_id in tool_calls_emitted:
-                            continue
-                        name = acc["name"]
-                        if not name:
-                            continue
-                        try:
-                            args = json.loads(acc["args"]) if acc["args"] else {}
-                        except (json.JSONDecodeError, ValueError):
-                            args = {"raw": acc["args"]}
-                        tool_calls_emitted.add(tc_id)
-                        yield StreamEvent(
-                            kind="tool_call",
-                            node="agent",
-                            content=name,
-                            metadata={"args": args},
-                        )
-
-                    preview = str(getattr(msg_chunk, "content", ""))[:200]
-                    yield StreamEvent(
-                        kind="tool_result",
-                        node="tools",
-                        content=getattr(msg_chunk, "name", ""),
-                        metadata={"preview": preview},
-                    )
+                    yield from _emit_tool_events(msg_chunk, state)
 
         except Exception as e:
             yield StreamEvent(kind="error", content=f"{type(e).__name__}: {e}")
 
-        # ── Usage fallback via get_state ──
-        if usage.input_tokens == 0 and usage.output_tokens == 0:
-            try:
-                final_state = self._graph.get_state({"configurable": {"thread_id": tid}})
-                if final_state and final_state.values:
-                    msgs = final_state.values.get("messages", [])
-                    if msgs:
-                        usage = _extract_usage(msgs[-1])
-            except Exception:
-                pass
+        if state.usage.input_tokens == 0 and state.usage.output_tokens == 0:
+            state.usage = self._extract_usage_fallback(tid)
 
-        final_text = "".join(all_text)
-
+        final_text = "".join(state.all_text)
         self._persist_turn(tid, message, final_text)
 
         yield StreamEvent(
             kind="done",
             content=final_text,
             metadata={
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "cache_read_input_tokens": usage.cache_read_input_tokens,
-                "cache_creation_input_tokens": usage.cache_creation_input_tokens,
-                "prompt_cache_hit_tokens": usage.prompt_cache_hit_tokens,
-                "prompt_cache_miss_tokens": usage.prompt_cache_miss_tokens,
+                "input_tokens": state.usage.input_tokens,
+                "output_tokens": state.usage.output_tokens,
+                "cache_read_input_tokens": state.usage.cache_read_input_tokens,
+                "cache_creation_input_tokens": state.usage.cache_creation_input_tokens,
+                "prompt_cache_hit_tokens": state.usage.prompt_cache_hit_tokens,
+                "prompt_cache_miss_tokens": state.usage.prompt_cache_miss_tokens,
             },
         )
+
+    def _extract_usage_fallback(self, thread_id: str) -> Usage:
+        """Attempt to extract usage from graph state as fallback."""
+        try:
+            final_state = self._graph.get_state(
+                {"configurable": {"thread_id": thread_id}}
+            )
+            if final_state and final_state.values:
+                msgs = final_state.values.get("messages", [])
+                if msgs:
+                    return _extract_usage(msgs[-1])
+        except Exception:
+            pass
+        return Usage()
