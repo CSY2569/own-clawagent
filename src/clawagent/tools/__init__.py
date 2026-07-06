@@ -1,5 +1,6 @@
 """Tool definitions for the clawagent."""
 
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -83,26 +84,54 @@ def write_file(path: str, content: str) -> str:
         return f"Error writing file: {e}"
 
 
+# Dangerous commands blocked for security (with shell=False, pipes/redirects
+# are also prevented automatically since shlex.split rejects shell metacharacters).
+_DANGEROUS_COMMANDS: set[str] = {
+    "rm", "sudo", "chmod", "chown", "mkfs", "dd", "shutdown", "reboot",
+    "poweroff", "halt", "kill", "pkill", "killall",
+}
+
+
 @tool
 def run_command(command: str) -> str:
-    """Run a shell command and return its output.
+    """Run a command and return its output.
+
+    Each invocation runs a single command with arguments. Pipes, redirects
+    (>, >>), and command chaining (&&, ;, |) are not supported for safety.
 
     The command runs from the project root directory. Use this for
     development tasks like building, testing, linting, or git operations.
-    Prefer read-only commands when possible.
 
     Args:
-        command: Shell command to execute (e.g. "uv run ruff check .", "git status").
+        command: Command with arguments (e.g. "uv run ruff check .",
+                 "git status", "pytest tests/ -v"). No pipes or redirects.
     """
     try:
+        args = shlex.split(command)
+    except ValueError as e:
+        return f"Command parsing error (shell metacharacters not allowed): {e}"
+
+    if not args:
+        return "Empty command"
+
+    cmd_name = args[0]
+    if cmd_name in _DANGEROUS_COMMANDS:
+        return (
+            f"Blocked: '{cmd_name}' is not permitted for safety reasons. "
+            "Destructive commands are disabled in this environment."
+        )
+
+    try:
         result = subprocess.run(
-            command,
-            shell=True,
+            args,
+            shell=False,
             capture_output=True,
             text=True,
             timeout=120,
             cwd=str(PROJECT_ROOT),
         )
+    except FileNotFoundError:
+        return f"Command not found: {cmd_name}"
     except subprocess.TimeoutExpired:
         return f"Command timed out after 120s: {command}"
     except Exception as e:

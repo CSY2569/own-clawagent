@@ -1,8 +1,10 @@
 """Web search tool using Bing + trafilatura full-text extraction."""
 
+import ipaddress
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import trafilatura
@@ -26,6 +28,51 @@ _HEADERS = {
 
 _SearchResult = dict[str, str]
 
+# Allowed URL schemes for fetching page content
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+# Private / reserved IP ranges blocked for SSRF prevention
+_PRIVATE_NETS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.IPv4Network("10.0.0.0/8"),
+    ipaddress.IPv4Network("172.16.0.0/12"),
+    ipaddress.IPv4Network("192.168.0.0/16"),
+    ipaddress.IPv4Network("127.0.0.0/8"),
+    ipaddress.IPv4Network("169.254.0.0/16"),
+    ipaddress.IPv4Network("0.0.0.0/8"),
+    ipaddress.IPv4Network("224.0.0.0/4"),
+    ipaddress.IPv6Network("::1/128"),
+    ipaddress.IPv6Network("fc00::/7"),
+    ipaddress.IPv6Network("fe80::/10"),
+]
+
+
+def _is_safe_url(url: str) -> bool:
+    """Check whether a URL points to a public internet address.
+
+    Blocks private / loopback / link-local / multicast IPs.  Domain-based URLs
+    are allowed — the DNS resolution and connection happen inside httpx,
+    which rejects responses directed to private IPs when used with a safe
+    resolver.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+
+    if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
+        return False
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return True
+
+    return not any(ip in net for net in _PRIVATE_NETS)
+
 
 def _do_search(query: str) -> tuple[list[_SearchResult], str | None]:
     """Execute Bing search. Returns (results, error) — error is None on success."""
@@ -45,28 +92,34 @@ def _do_search(query: str) -> tuple[list[_SearchResult], str | None]:
         except httpx.TimeoutException:
             if attempt == 2:
                 return [], (
-                    f'【超时】搜索 "{query}" 请求超时。\n'
-                    "建议：换更短的关键词重试。"
+                    f'[Search Error] Request timed out for query: "{query}". '
+                    "Suggestion: try shorter or more specific keywords."
                 )
         except httpx.HTTPStatusError as e:
-            return [], f"【搜索失败】Bing 返回 HTTP {e.response.status_code}"
+            return [], (
+                f"[Search Error] Bing returned HTTP {e.response.status_code} "
+                f'for query: "{query}"'
+            )
         except Exception as e:
             if attempt == 2:
                 err_msg = str(e)
                 if "ConnectError" in err_msg or "Network is unreachable" in err_msg:
                     return [], (
-                        f'【网络不可达】搜索 "{query}" 失败。\n'
-                        "请检查代理是否运行 (http_proxy/https_proxy)。"
+                        f'[Search Error] Network unreachable for query: "{query}". '
+                        "Check proxy settings (http_proxy/https_proxy)."
                     )
-                return [], f"【搜索失败】{type(e).__name__}: {e}"
+                return [], (
+                    f"[Search Error] {type(e).__name__}: {e} "
+                    f'for query: "{query}"'
+                )
 
     soup = BeautifulSoup(resp.text, "lxml")
     raw = soup.select("li.b_algo")[:_MAX_SEARCH_RESULTS]
 
     if not raw:
         return [], (
-            f'【未找到】关键词 "{query}" 在网上没有匹配结果。\n'
-            "建议：尝试更宽泛的关键词重试。"
+            f'[No Results] No matches found for "{query}". '
+            "Try broader or different keywords."
         )
 
     results = [
@@ -88,7 +141,7 @@ def _get_title(tag: Any) -> str:
     a = tag.find("a")
     if isinstance(a, Tag):
         return a.get_text(strip=True)
-    return "无标题"
+    return "No Title"
 
 
 def _get_link(tag: Any) -> str:
@@ -108,24 +161,24 @@ def _get_text(tag: Any, selector: str) -> str:
 
 
 def _format_summary(results: list[_SearchResult]) -> str:
-    lines = [f"## 搜索结果（共 {len(results)} 条）"]
+    lines = [f"## Search Results ({len(results)} found)"]
     for i, r in enumerate(results, 1):
         lines.append(f"{i}. **{r['title']}**")
         if r["link"]:
-            lines.append(f"   链接: {r['link']}")
+            lines.append(f"   URL: {r['link']}")
         if r["snippet"]:
-            lines.append(f"   摘要: {r['snippet']}")
+            lines.append(f"   Snippet: {r['snippet']}")
         if r["source"]:
-            lines.append(f"   来源: {r['source']}")
+            lines.append(f"   Source: {r['source']}")
     return "\n".join(lines)
 
 
 def _fetch_and_extract(results: list[_SearchResult]) -> str:
-    """Parallel fetch and extract full text from top-3 pages."""
+    """Parallel fetch and extract full text from top-3 pages (safe URLs only)."""
     targets: list[tuple[int, str]] = [
         (i, r["link"])
         for i, r in enumerate(results[:_MAX_DEEP_PAGES])
-        if r["link"]
+        if r["link"] and _is_safe_url(r["link"])
     ]
     if not targets:
         return ""
@@ -167,24 +220,34 @@ def _fetch_and_extract(results: list[_SearchResult]) -> str:
                 pass
 
     if not extracted:
-        return "\n\n（全文提取：所有页面均无法提取正文，请基于上述搜索摘要作答）"
+        return (
+            "\n\n(Full-text extraction: no pages could be extracted. "
+            "Use the search snippets above instead.)"
+        )
 
-    lines = [f"\n## 前 {_MAX_DEEP_PAGES} 条全文提取"]
+    lines = [f"\n## Full-Text Extraction (top {_MAX_DEEP_PAGES} pages)"]
     for i in range(min(len(results), _MAX_DEEP_PAGES)):
         r = results[i]
         content = extracted.get(i)
         lines.append(f"\n### {i + 1}. {r['title']}")
-        lines.append(f"来源: {r['link']}")
+        lines.append(f"Source: {r['link']}")
         if content:
             if len(content) > _MAX_PAGE_CHARS:
                 content = content[:_MAX_PAGE_CHARS] + (
-                    f"\n\n...（已截断，原文共 {len(content)} 字符）"
+                    f"\n\n... (truncated, original length: {len(content)} chars)"
                 )
             lines.append(content)
         else:
-            lines.append("（无法提取正文，请参考上方搜索摘要中的片段）")
+            lines.append("(Could not extract text — see search snippet above)")
 
     return "\n".join(lines)
+
+
+# Rate limiting — prevent IP bans from excessive Bing requests
+_last_search_time: float = 0.0
+_SEARCH_COOLDOWN: float = 2.0
+_MAX_CONSECUTIVE_ERRORS: int = 5
+_consecutive_errors: int = 0
 
 
 @tool
@@ -203,7 +266,24 @@ def web_search(query: str) -> str:
     Args:
         query: 搜索关键词（中文直接用原句）。
     """
+    global _last_search_time, _consecutive_errors
+
+    if _consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+        return (
+            "[Search Error] Too many consecutive failures — "
+            "web search temporarily disabled. Please wait before retrying."
+        )
+
+    elapsed = time.time() - _last_search_time
+    if elapsed < _SEARCH_COOLDOWN:
+        time.sleep(_SEARCH_COOLDOWN - elapsed)
+
     results, error = _do_search(query)
+    _last_search_time = time.time()
+
     if error:
+        _consecutive_errors += 1
         return error
+
+    _consecutive_errors = 0
     return _format_summary(results) + _fetch_and_extract(results)
