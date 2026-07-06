@@ -19,7 +19,7 @@
 - **设置热更新** — 无需重启即可切换模型、temperature、最大输出 token、压缩策略
 - **交互式 REPL** — Rich 驱动仪表板，实时 token 用量和费用统计，斜杠命令自动补全，流式输出
 - **mypy 零错误** — 50 个源文件全部通过严格模式类型检查
-- **327 个测试通过** — 完整覆盖：Agent、Worker、工具、记忆、RAG、压缩、流式、API 池、取消令牌、UI
+- **352 个测试通过** — 完整覆盖：Agent、Worker、工具、记忆、RAG、压缩、流式、API 池、取消令牌、UI
 
 ## 快速开始
 
@@ -268,7 +268,7 @@ prompts/
 │   └── search-rules.md
 └── README.md
 
-tests/                     # 327 个测试（22 个文件）
+tests/                     # 352 个测试（22 个文件）
 ├── test_agent.py          # Agent 包装器（Usage、AgentResponse）
 ├── test_api_pool.py       # API Key 池
 ├── test_cancel_token.py   # Ctrl+C 取消
@@ -308,7 +308,7 @@ uv run ruff format .
 # 类型检查（0 错误，50 个源文件）
 uv run mypy src/
 
-# 运行测试（327 个测试）
+# 运行测试（352 个测试）
 uv run pytest tests/ -v
 
 # 运行单文件测试

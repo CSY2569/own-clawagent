@@ -19,7 +19,7 @@ A LangChain/LangGraph tool-calling agent powered by DeepSeek (via Anthropic-comp
 - **Settings hot-reload** — Switch model, temperature, max tokens, and compression strategy without restart
 - **Interactive REPL** — Rich-powered dashboard with live token tracking, cost estimation, slash-command autocomplete, and streaming output
 - **mypy zero errors** — Full strict-mode type checking across 50 source files
-- **327 passing tests** — Full coverage: agents, workers, tools, memory, RAG, compression, streaming, API pool, cancel token, and UI
+- **352 passing tests** — Full coverage: agents, workers, tools, memory, RAG, compression, streaming, API pool, cancel token, and UI
 
 ## Quick Start
 
@@ -268,7 +268,7 @@ prompts/
 │   └── search-rules.md
 └── README.md
 
-tests/                     # 327 tests (22 files)
+tests/                     # 352 tests (22 files)
 ├── test_agent.py          # Agent wrapper (Usage, AgentResponse)
 ├── test_api_pool.py       # API key pool
 ├── test_cancel_token.py   # Ctrl+C cancellation
@@ -308,7 +308,7 @@ uv run ruff format .
 # Type check (0 errors, 50 source files)
 uv run mypy src/
 
-# Run tests (327 tests)
+# Run tests (352 tests)
 uv run pytest tests/ -v
 
 # Run specific test file

@@ -42,6 +42,7 @@ __pycache__/
 *.swo
 *.swp
 # Testing
+tests/
 Thumbs.db
 # Type checker & linter
 *.venv
