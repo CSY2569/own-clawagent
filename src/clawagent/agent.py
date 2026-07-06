@@ -208,6 +208,8 @@ class Usage:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    prompt_cache_hit_tokens: int = 0
+    prompt_cache_miss_tokens: int = 0
 
     @classmethod
     def from_response_metadata(cls, metadata: dict[str, Any]) -> Usage:
@@ -219,6 +221,8 @@ class Usage:
             output_tokens=usage.get("output_tokens", 0),
             cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
             cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
+            prompt_cache_hit_tokens=usage.get("prompt_cache_hit_tokens", 0),
+            prompt_cache_miss_tokens=usage.get("prompt_cache_miss_tokens", 0),
         )
 
 
@@ -231,6 +235,8 @@ def _extract_usage(msg: Any) -> Usage:
             output_tokens=usage_dict.get("output_tokens", 0),
             cache_read_input_tokens=usage_dict.get("cache_read_input_tokens", 0),
             cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens", 0),
+            prompt_cache_hit_tokens=usage_dict.get("prompt_cache_hit_tokens", 0),
+            prompt_cache_miss_tokens=usage_dict.get("prompt_cache_miss_tokens", 0),
         )
     meta = getattr(msg, "response_metadata", None) or {}
     return Usage.from_response_metadata(meta)
@@ -466,5 +472,7 @@ class Agent:
                 "output_tokens": usage.output_tokens,
                 "cache_read_input_tokens": usage.cache_read_input_tokens,
                 "cache_creation_input_tokens": usage.cache_creation_input_tokens,
+                "prompt_cache_hit_tokens": usage.prompt_cache_hit_tokens,
+                "prompt_cache_miss_tokens": usage.prompt_cache_miss_tokens,
             },
         )
