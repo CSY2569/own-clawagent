@@ -1,64 +1,57 @@
-# Python
-__pycache__/
-*.py[cod]
-*.so
-*.egg-info/
-dist/
-build/
-*.egg
-.eggs/
 
-# Virtual environments
-.venv/
-venv/
-env/
-*.venv
-
-# Environment files
-.env
-.env.local
-
-# Memory database (contains personal conversation data)
-memories/
-
-# IDE / editor
-.vscode/
-.idea/
-*.swp
-*.swo
 *~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# CodeGraph index
-.codegraph/
-
-# Claude Code local settings
-.claude/settings.local.json
-
-# Type checker & linter
-.mypy_cache/
-.ruff_cache/
-
-# Testing
-.pytest_cache/
-htmlcov/
-.coverage
-
-# Logs
-*.log
-
-# Local docs & test dirs
 测试/
-tests/
-chroma_db/
-docs/
 实施文档/
 bug/
-
+build/
+chroma_db/
+# Claude Code local settings
+.claude/settings.local.json
+.codegraph/
+# CodeGraph index
+.coverage
+dist/
 #docs
 docs/
-output/
+.DS_Store
+*.egg
+*.egg-info/
+.eggs/
+.env
+env/
+# Environment files
+.env.local
+htmlcov/
+.idea/
+# IDE / editor
+# Local docs & test dirs
+*.log
 logs/
+# Logs
+memories/
+# Memory database (contains personal conversation data)
+.mypy_cache/
+# OS
+output/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# Python
+.ruff_cache/
+*.so
+*.swo
+*.swp
+# Testing
+tests/
+Thumbs.db
+# Type checker & linter
+*.venv
+.venv/
+venv/
+# Virtual environments
+.vscode/
+AGENTS.md
+知识清单.md
+.omo/
+
+.gitignore
