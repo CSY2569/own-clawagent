@@ -3,6 +3,7 @@
 from rich.console import Console
 
 from clawagent.agent import Agent, Usage, create_agent
+from clawagent.cli.session import AgentRef
 from clawagent.config import Settings
 from clawagent.conversation_log import ConversationLogger
 from clawagent.memory.summarizer import get_summary, list_summaries, list_thread_ids, load_messages
@@ -88,14 +89,14 @@ def load_session(
 
 
 def new_session(
-    agent_ref: dict[str, Agent],
+    agent_ref: AgentRef,
     settings: Settings,
     console: Console,
     stats: ConversationStats,
     logger: ConversationLogger,
 ) -> None:
     """Create a new session and switch to it immediately."""
-    old_agent = agent_ref["agent"]
+    old_agent = agent_ref.agent
     logger.log_session_end(
         old_agent.thread_id,
         stats.message_count,
@@ -111,13 +112,13 @@ def new_session(
     old_agent.close()
 
     graph, conn, factory, delegate_tool = create_agent(settings)
-    agent_ref["agent"] = Agent(
+    agent_ref.agent = Agent(
         graph,
         db_path=settings.memory_db_path,
         conn=conn,
         factory=factory,
         delegate_tool=delegate_tool,
     )
-    logger.log_session_start(agent_ref["agent"].thread_id, settings)
+    logger.log_session_start(agent_ref.agent.thread_id, settings)
     stats.reset()
-    console.print(f"[bold green]已创建新会话: {agent_ref['agent'].thread_id}[/bold green]")
+    console.print(f"[bold green]已创建新会话: {agent_ref.agent.thread_id}[/bold green]")

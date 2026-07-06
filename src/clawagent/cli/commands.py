@@ -6,8 +6,8 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
-from clawagent.agent import Agent
 from clawagent.cli.display import load_session, new_session, rag_search, show_sessions
+from clawagent.cli.session import AgentRef
 from clawagent.config import PriceConfig, Settings, load_price_book
 from clawagent.conversation_log import ConversationLogger
 from clawagent.ui import ConversationStats
@@ -15,31 +15,31 @@ from clawagent.ui import ConversationStats
 type _CmdResult = tuple[Settings, PriceConfig] | None
 
 
-def _cmd_sessions(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_sessions(cmd: str, agent_ref: AgentRef, settings: Settings,
                   console: Console, stats: ConversationStats, pricing: PriceConfig,
                   logger: ConversationLogger) -> _CmdResult:
-    show_sessions(agent_ref["agent"], settings, console)
+    show_sessions(agent_ref.agent, settings, console)
     return None
 
 
-def _cmd_load(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_load(cmd: str, agent_ref: AgentRef, settings: Settings,
               console: Console, stats: ConversationStats, pricing: PriceConfig,
               logger: ConversationLogger) -> _CmdResult:
-    load_session(cmd[6:].strip(), agent_ref["agent"], settings, console)
+    load_session(cmd[6:].strip(), agent_ref.agent, settings, console)
     return None
 
 
-def _cmd_new(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_new(cmd: str, agent_ref: AgentRef, settings: Settings,
              console: Console, stats: ConversationStats, pricing: PriceConfig,
              logger: ConversationLogger) -> _CmdResult:
     new_session(agent_ref, settings, console, stats, logger)
     return None
 
 
-def _cmd_model(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_model(cmd: str, agent_ref: AgentRef, settings: Settings,
                console: Console, stats: ConversationStats, pricing: PriceConfig,
                logger: ConversationLogger) -> _CmdResult:
-    agent = agent_ref["agent"]
+    agent = agent_ref.agent
     model_name = cmd[7:].strip()
     try:
         new_settings = replace(settings, model_name=model_name)
@@ -53,10 +53,10 @@ def _cmd_model(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
         return settings, pricing
 
 
-def _cmd_temp(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_temp(cmd: str, agent_ref: AgentRef, settings: Settings,
               console: Console, stats: ConversationStats, pricing: PriceConfig,
               logger: ConversationLogger) -> _CmdResult:
-    agent = agent_ref["agent"]
+    agent = agent_ref.agent
     try:
         temp = float(cmd[6:].strip())
     except ValueError:
@@ -69,10 +69,10 @@ def _cmd_temp(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
     return new_settings, pricing
 
 
-def _cmd_max_tokens(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_max_tokens(cmd: str, agent_ref: AgentRef, settings: Settings,
                     console: Console, stats: ConversationStats, pricing: PriceConfig,
                     logger: ConversationLogger) -> _CmdResult:
-    agent = agent_ref["agent"]
+    agent = agent_ref.agent
     try:
         max_tok = int(cmd[12:].strip())
     except ValueError:
@@ -85,7 +85,7 @@ def _cmd_max_tokens(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
     return new_settings, pricing
 
 
-def _cmd_settings(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_settings(cmd: str, agent_ref: AgentRef, settings: Settings,
                   console: Console, stats: ConversationStats, pricing: PriceConfig,
                   logger: ConversationLogger) -> _CmdResult:
     from clawagent.ui import _format_tokens
@@ -100,10 +100,10 @@ def _cmd_settings(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
     return None
 
 
-def _cmd_compress(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_compress(cmd: str, agent_ref: AgentRef, settings: Settings,
                   console: Console, stats: ConversationStats, pricing: PriceConfig,
                   logger: ConversationLogger) -> _CmdResult:
-    agent = agent_ref["agent"]
+    agent = agent_ref.agent
     strategy = cmd[10:].strip()
     valid = {"trim", "token_trim", "summarize"}
     if strategy not in valid:
@@ -116,7 +116,7 @@ def _cmd_compress(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
     return new_settings, pricing
 
 
-def _cmd_rag_search(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_rag_search(cmd: str, agent_ref: AgentRef, settings: Settings,
                     console: Console, stats: ConversationStats, pricing: PriceConfig,
                     logger: ConversationLogger) -> _CmdResult:
     query = cmd[12:].strip()
@@ -127,7 +127,7 @@ def _cmd_rag_search(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
     return None
 
 
-def _cmd_help(cmd: str, agent_ref: dict[str, Agent], settings: Settings,
+def _cmd_help(cmd: str, agent_ref: AgentRef, settings: Settings,
               console: Console, stats: ConversationStats, pricing: PriceConfig,
               logger: ConversationLogger) -> _CmdResult:
     from clawagent.cli import SLASH_COMMANDS
@@ -162,7 +162,7 @@ _CMD_PREFIX: list[tuple[str, Any]] = [
 
 def handle_command(
     cmd: str,
-    agent_ref: dict[str, Agent],
+    agent_ref: AgentRef,
     settings: Settings,
     console: Console,
     stats: ConversationStats,
