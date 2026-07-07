@@ -12,7 +12,7 @@ _cache_lock = threading.Lock()
 def _get_conn(db_path: str) -> sqlite3.Connection:
     p = Path(db_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
+    conn = sqlite3.connect(str(p), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     _ensure_table(conn)
     _ensure_messages_table(conn)
