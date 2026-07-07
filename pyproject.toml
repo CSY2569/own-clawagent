@@ -21,6 +21,7 @@ dependencies = [
     "beautifulsoup4>=4.15.0",
     "trafilatura>=2.1.0",
     "debugpy>=1.8.21",
+    "weixin-ilink>=0.3.5",
 ]
 
 [project.scripts]
