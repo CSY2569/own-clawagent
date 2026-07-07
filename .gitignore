@@ -53,4 +53,8 @@ venv/
 .omo/
 blog/
 
+# iLink WeChat credentials
+ilink_creds.json
+ilink_creds.json.sync
+
 .gitignore
