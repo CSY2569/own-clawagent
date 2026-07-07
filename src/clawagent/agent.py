@@ -88,13 +88,32 @@ def _make_model(settings: Settings) -> Any:
     return model
 
 
-def _make_sys_prompt(settings: Settings, memory_db_path: str, delegate_tool: BaseTool | None = None) -> str:
+def _make_sys_prompt(
+    settings: Settings,
+    memory_db_path: str,
+    delegate_tool: BaseTool | None = None,
+    channel: str = "cli",
+) -> str:
     """Build the system prompt from layered prompt files and preferences."""
+    extra = ""
+    if channel != "cli":
+        extra = (
+            "## File Sharing\n"
+            "When the user asks you to send a file, use write_file to save it, "
+            "then include [FILE:path] in your response. Use the SAME relative path "
+            "you passed to write_file (e.g. 'output/report.pdf'). "
+            "Example: 'Here is the report. [FILE:output/report.pdf]'"
+        )
     return PromptBuilder(
         prompts_dir=_PROMPTS_DIR,
         memory_db_path=memory_db_path,
         max_preferences=settings.max_preferences,
-    ).build(agent_id=settings.agent_id, source="cli", delegate_tool=delegate_tool)
+    ).build(
+        agent_id=settings.agent_id,
+        source=channel,
+        delegate_tool=delegate_tool,
+        extra_context=extra,
+    )
 
 
 def _make_all_tools(delegate_tool: BaseTool | None, memory_tools: list[BaseTool] | None = None) -> list[BaseTool]:
@@ -139,8 +158,14 @@ def _build_middleware(compression_config: CompressionConfig, model: Any) -> list
     return middleware
 
 
-def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.Connection, WorkerFactory, BaseTool]:
+def create_agent(
+    settings: Settings, channel: str = "cli",
+) -> tuple[CompiledStateGraph[Any], sqlite3.Connection, WorkerFactory, BaseTool]:
     """Build a tool-calling ReAct agent backed by Anthropic Claude.
+
+    Args:
+        settings: Application settings.
+        channel: Channel identifier for prompt context ("cli", "wechat", etc.).
 
     Returns (graph, db_connection, worker_factory, delegate_tool) tuple.
     The caller must close the connection when done.
@@ -159,7 +184,7 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
     delegate_tool = make_delegate_task(factory)
 
     db_path = _ensure_memory_dir(settings.memory_db_path)
-    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool)
+    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool, channel=channel)
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
 
@@ -179,7 +204,11 @@ def create_agent(settings: Settings) -> tuple[CompiledStateGraph[Any], sqlite3.C
 
 
 def rebuild_graph(
-    settings: Settings, db_path: str, conn: sqlite3.Connection, delegate_tool: BaseTool | None
+    settings: Settings,
+    db_path: str,
+    conn: sqlite3.Connection,
+    delegate_tool: BaseTool | None,
+    channel: str = "cli",
 ) -> CompiledStateGraph[Any]:
     """Rebuild agent graph with new model settings, reusing existing DB connection.
 
@@ -187,7 +216,7 @@ def rebuild_graph(
     without losing conversation state stored in the checkpointer.
     """
     model = _make_model(settings)
-    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool)
+    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool, channel=channel)
 
     memory_tools = create_memory_tools(db_path, model)
 
@@ -348,6 +377,7 @@ class Agent:
         default_thread_id: str | None = None,
         factory: WorkerFactory | None = None,
         delegate_tool: BaseTool | None = None,
+        channel: str = "cli",
     ) -> None:
         self._graph = graph
         self._db_path = db_path
@@ -355,6 +385,7 @@ class Agent:
         self._thread_id = default_thread_id or uuid4().hex[:8]
         self._factory = factory
         self._delegate_tool = delegate_tool
+        self._channel = channel
         self._turn_count: int = 0
 
     @property
@@ -371,7 +402,9 @@ class Agent:
             return
         if self._factory is not None:
             self._factory.set_settings(settings)
-        self._graph = rebuild_graph(settings, self._db_path, self._conn, self._delegate_tool)
+        self._graph = rebuild_graph(
+            settings, self._db_path, self._conn, self._delegate_tool, channel=self._channel,
+        )
 
     def _persist_turn(self, thread_id: str, user_msg: str, assistant_msg: str) -> None:
         """Save turn to conversation log, session index, and preference store."""
