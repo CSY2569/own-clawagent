@@ -14,7 +14,7 @@ import re
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from clawagent.gateway.channel import IChannel, IncomingMessage, OutgoingMessage
@@ -49,11 +49,16 @@ async def _handle_message(
     session_mgr: SessionManager,
     renderer: IEventRenderer,
 ) -> AsyncIterator[str]:
-    """Core message handler — shared by all channels."""
+    """Core message handler — shared by all channels.
+
+    Streams rendered text chunks as they arrive, instead of buffering
+    the entire response. Uses an asyncio.Queue bridge so the synchronous
+    agent.stream_events() runs in a worker thread while chunks are
+    consumed asynchronously with per-chunk timeout.
+    """
     channel = msg.channel.name.lower()
     t0 = time.monotonic()
 
-    # Log incoming message (truncate long content)
     preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
     logger.info(
         "[%s] ← user=%s len=%d: %s",
@@ -67,44 +72,61 @@ async def _handle_message(
     )
 
     loop = asyncio.get_running_loop()
+    event_queue: asyncio.Queue[Any] = asyncio.Queue()
     tool_calls = 0
     total_tokens = 0
+    total_text_len = 0
+
+    def _produce() -> None:
+        try:
+            for event in agent.stream_events(msg.content):
+                loop.call_soon_threadsafe(event_queue.put_nowait, event)
+        except Exception as exc:
+            loop.call_soon_threadsafe(event_queue.put_nowait, exc)
+        finally:
+            loop.call_soon_threadsafe(event_queue.put_nowait, None)
+
+    loop.run_in_executor(None, _produce)
 
     try:
-        events = await asyncio.wait_for(
-            loop.run_in_executor(
-                None,
-                lambda: list(agent.stream_events(msg.content)),
-            ),
-            timeout=120.0,
-        )
+        while True:
+            item = await asyncio.wait_for(event_queue.get(), timeout=120.0)
+
+            if item is None:
+                break
+
+            if isinstance(item, Exception):
+                elapsed = time.monotonic() - t0
+                logger.error(
+                    "[%s] error user=%s after %.1fs: %s",
+                    channel, msg.user_id[:12], elapsed, item,
+                )
+                yield f"[Error] {item}"
+                return
+
+            event = item
+
+            if event.kind == "tool_call":
+                tool_calls += 1
+                logger.debug(
+                    "[%s] tool_call=%s args=%s", channel, event.content,
+                    str(event.metadata.get("args", {}))[:120],
+                )
+            elif event.kind == "done":
+                usage = event.metadata
+                total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+
+            for rendered in renderer.render(event):
+                if isinstance(rendered, str) and rendered:
+                    total_text_len += len(rendered)
+                    yield rendered
+
     except TimeoutError:
         elapsed = time.monotonic() - t0
-        logger.warning("[%s] timeout user=%s after %.1fs", channel, msg.user_id[:12], elapsed)
+        logger.warning(
+            "[%s] timeout user=%s after %.1fs", channel, msg.user_id[:12], elapsed
+        )
         yield "[Timeout] 请求超时，请重试。"
-        return
-    except Exception as exc:
-        elapsed = time.monotonic() - t0
-        logger.error("[%s] error user=%s after %.1fs: %s", channel, msg.user_id[:12], elapsed, exc)
-        yield f"[Error] {exc}"
-        return
-
-    total_text_len = 0
-    for event in events:
-        if event.kind == "tool_call":
-            tool_calls += 1
-            logger.debug(
-                "[%s] tool_call=%s args=%s", channel, event.content,
-                str(event.metadata.get("args", {}))[:120],
-            )
-        elif event.kind == "done":
-            usage = event.metadata
-            total_tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-
-        for rendered in renderer.render(event):
-            if isinstance(rendered, str) and rendered:
-                total_text_len += len(rendered)
-                yield rendered
 
     elapsed = time.monotonic() - t0
     logger.info(
@@ -132,30 +154,25 @@ async def run_gateway(
         ) -> AsyncIterator[OutgoingMessage]:
             from clawagent.gateway.channel import OutgoingMessage
 
-            # Collect all rendered text chunks
-            chunks: list[str] = []
-            async for text in _handle_message(msg, session_mgr, renderer):
-                chunks.append(text)
-
-            combined = "".join(chunks)
-
-            # Detect [FILE:/path] marker — agent wants to share a file
             file_path: str | None = None
-            match = _FILE_MARKER.search(combined)
-            if match:
-                raw_path = match.group(1).strip()
-                resolved = Path(raw_path)
-                if not resolved.is_absolute():
-                    from clawagent.config import PROJECT_ROOT
-                    resolved = PROJECT_ROOT / resolved
-                file_path = str(resolved.resolve())
-                combined = _FILE_MARKER.sub("", combined).strip()
-                logger.info(
-                    "[%s] file share detected: %s", channel_name, file_path,
-                )
 
-            if combined:
-                yield OutgoingMessage(text=combined)
+            async for text in _handle_message(msg, session_mgr, renderer):
+                match = _FILE_MARKER.search(text)
+                if match:
+                    raw_path = match.group(1).strip()
+                    resolved = Path(raw_path)
+                    if not resolved.is_absolute():
+                        from clawagent.config import PROJECT_ROOT
+                        resolved = PROJECT_ROOT / resolved
+                    file_path = str(resolved.resolve())
+                    text = _FILE_MARKER.sub("", text).strip()
+                    logger.info(
+                        "[%s] file share detected: %s", channel_name, file_path,
+                    )
+
+                if text:
+                    yield OutgoingMessage(text=text)
+
             if file_path:
                 yield OutgoingMessage(file_url=file_path)
 
