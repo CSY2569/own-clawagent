@@ -1,5 +1,6 @@
 """Compression strategies: trim_by_count, trim_by_tokens, summarize_by_llm."""
 
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -71,6 +72,7 @@ def summarize_by_llm(
         model: LLM model instance (e.g. ChatAnthropic) for summary generation.
         max_messages: Threshold to trigger summarization.
         keep_recent: Number of recent non-system messages to keep as raw dialogue.
+        timeout: Hard timeout in seconds — on expiry, falls back to trim_by_count.
 
     Returns:
         Messages with a summary SystemMessage replacing overflow messages.
@@ -78,7 +80,6 @@ def summarize_by_llm(
     if len(messages) <= max_messages:
         return messages
 
-    # Separate system messages, filtering out old summaries
     system_msgs = [
         m for m in messages
         if isinstance(m, SystemMessage) and not _is_summary(m)
@@ -91,7 +92,6 @@ def summarize_by_llm(
     to_summarize = non_system[:-keep_recent]
     to_keep = non_system[-keep_recent:]
 
-    # Extract old summary text to incorporate into the new one
     old_summary = _extract_old_summary(messages)
 
     summary_prompt = (
@@ -108,15 +108,22 @@ def summarize_by_llm(
         for m in to_summarize
     )
 
-    response = model.invoke(
-        [HumanMessage(content=summary_prompt)],
-        config={"timeout": timeout},
-    )
-    content = response.content if hasattr(response, "content") else str(response)
-    summary_text = extract_text(content).strip()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_invoke_summary_model, model, summary_prompt)
+            summary_text = future.result(timeout=timeout)
+    except (TimeoutError, Exception):
+        return trim_by_count(system_msgs + non_system, max_messages)
 
     summary_msg = SystemMessage(content=f"{_SUMMARY_PREFIX} {summary_text}")
     return [*system_msgs, summary_msg, *to_keep]
+
+
+def _invoke_summary_model(model: Any, prompt: str) -> str:
+    """Invoke model for summary — runs in worker thread."""
+    response = model.invoke([HumanMessage(content=prompt)])
+    content = response.content if hasattr(response, "content") else str(response)
+    return extract_text(content).strip()
 
 
 def _is_summary(msg: SystemMessage) -> bool:
