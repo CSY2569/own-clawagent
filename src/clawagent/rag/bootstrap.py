@@ -40,7 +40,7 @@ def bootstrap_rag(
     corpus = [d["text"] for d in all_docs]
     cache_dir = str(PROJECT_ROOT / "chroma_db")
 
-    bm25 = BM25Retriever()
+    bm25 = BM25Retriever(cache_secret=settings.bm25_cache_secret)
 
     def _knn_retrieve(query: str, k: int) -> list[dict[str, str]]:
         return rag_store.retrieve(query, top_k=k)

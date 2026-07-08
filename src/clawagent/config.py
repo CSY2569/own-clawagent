@@ -45,6 +45,7 @@ class Settings:
     compression_keep_recent: int = 6
     compression_summary_timeout: int = 30
     request_timeout: int = 120
+    bm25_cache_secret: str = ""
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -76,6 +77,7 @@ class Settings:
             compression_keep_recent=int(os.getenv("COMPRESSION_KEEP_RECENT", "6")),
             compression_summary_timeout=int(os.getenv("COMPRESSION_SUMMARY_TIMEOUT", "30")),
             request_timeout=int(os.getenv("CLAWAGENT_REQUEST_TIMEOUT", "120")),
+            bm25_cache_secret=os.getenv("CLAWAGENT_BM25_CACHE_SECRET", ""),
         )
 
 

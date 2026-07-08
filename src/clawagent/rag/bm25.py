@@ -1,14 +1,20 @@
 """BM25 lexical retriever with jieba tokenization."""
 
+import contextlib
 import hashlib
+import hmac
+import json
 import logging
-import pickle
 from math import log
 from pathlib import Path
+from typing import Any
 
 import jieba  # type: ignore[import-untyped]
 
 jieba.setLogLevel(logging.WARNING)
+
+_CACHE_FILE = "bm25_index.json"
+_LEGACY_CACHE_FILE = "bm25_index.pkl"
 
 
 class BM25Retriever:
@@ -25,12 +31,21 @@ class BM25Retriever:
         corpus: Full list of document texts.
         k1: Term frequency saturation parameter (default 1.5).
         b: Length normalization parameter (default 0.75).
+        cache_secret: Optional HMAC secret to sign cache files. When set,
+            tampered cache files are rejected. When empty, signing disabled.
     """
 
-    def __init__(self, corpus: list[str] | None = None, k1: float = 1.5, b: float = 0.75) -> None:
+    def __init__(
+        self,
+        corpus: list[str] | None = None,
+        k1: float = 1.5,
+        b: float = 0.75,
+        cache_secret: str = "",
+    ) -> None:
         self._corpus = corpus or []
         self._k1 = k1
         self._b = b
+        self._cache_secret = cache_secret
         self._ready = False
         self._N = 0
         self._avgdl = 0.0
@@ -99,15 +114,39 @@ class BM25Retriever:
             h.update(doc.encode("utf-8"))
         return h.hexdigest()[:16]
 
+    def _sign(self, payload: str) -> str:
+        return hmac.new(
+            self._cache_secret.encode("utf-8"),
+            payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
     def try_load_cache(self, cache_dir: str, corpus: list[str]) -> bool:
-        """Load BM25 index from disk cache. Returns True on success."""
-        cache_path = Path(cache_dir) / "bm25_index.pkl"
+        """Load BM25 index from disk cache. Returns True on success.
+
+        Reads JSON cache (signed when a secret is configured). Legacy .pkl
+        files are ignored — index will be rebuilt.
+        """
+        cache_path = Path(cache_dir) / _CACHE_FILE
         if not cache_path.exists():
-            return False
+            return self._try_load_legacy_pickle(cache_dir, corpus)
         try:
-            data = pickle.loads(cache_path.read_bytes())
-            if data.get("hash") != self._corpus_hash(corpus):
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+            corpus_hash = data.get("hash", "")
+            if corpus_hash != self._corpus_hash(corpus):
                 return False
+
+            if self._cache_secret:
+                signature = data.get("signature", "")
+                if not signature:
+                    return False
+                payload = json.dumps(
+                    {k: v for k, v in data.items() if k != "signature"},
+                    sort_keys=True,
+                )
+                if not hmac.compare_digest(self._sign(payload), signature):
+                    return False
+
             self._N = data["N"]
             self._avgdl = data["avgdl"]
             self._df = data["df"]
@@ -117,13 +156,20 @@ class BM25Retriever:
             self._corpus = corpus
             self._ready = True
             return True
-        except Exception:
+        except (json.JSONDecodeError, KeyError, TypeError):
             return False
 
+    def _try_load_legacy_pickle(self, cache_dir: str, corpus: list[str]) -> bool:
+        legacy_path = Path(cache_dir) / _LEGACY_CACHE_FILE
+        if legacy_path.exists():
+            with contextlib.suppress(OSError):
+                legacy_path.unlink()
+        return False
+
     def save_cache(self, cache_dir: str) -> None:
-        """Persist current BM25 index to disk."""
-        cache_path = Path(cache_dir) / "bm25_index.pkl"
-        data = {
+        """Persist current BM25 index to disk as signed JSON."""
+        cache_path = Path(cache_dir) / _CACHE_FILE
+        data: dict[str, Any] = {
             "hash": self._corpus_hash(self._corpus),
             "N": self._N,
             "avgdl": self._avgdl,
@@ -132,8 +178,11 @@ class BM25Retriever:
             "doc_len": self._doc_len,
             "tf": self._tf,
         }
+        if self._cache_secret:
+            payload = json.dumps(data, sort_keys=True)
+            data["signature"] = self._sign(payload)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_bytes(pickle.dumps(data))
+        cache_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     def retrieve(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
         """Search corpus and return top_k (corpus_index, bm25_score) tuples.
