@@ -6,7 +6,6 @@ The functions in this module are called from ``clawagent.main`` after
 
 from __future__ import annotations
 
-import threading
 from collections.abc import Iterable
 
 from prompt_toolkit import PromptSession
@@ -44,9 +43,7 @@ def _handle_user_message(
     ctx: SessionContext,
     user_input: str,
     console: Console,
-    current_worker: threading.Thread | None,
-    current_cancel: threading.Event | None,
-) -> tuple[threading.Thread | None, threading.Event | None]:
+) -> None:
     """Process one user message through the streaming pipeline."""
     agent = ctx.agent_ref.agent
 
@@ -62,11 +59,9 @@ def _handle_user_message(
             result.usage,
             ctx.settings,
         )
-        return current_worker, current_cancel
 
     except KeyboardInterrupt:
         console.print("\n  [yellow]⏸ 已中断[/yellow]")
-        return current_worker, current_cancel
 
     except Exception:
         console.print("\n[red]Streaming error, falling back to non-streaming mode...[/red]")
@@ -82,7 +77,6 @@ def _handle_user_message(
             ctx.settings,
             error="streaming_error",
         )
-        return current_worker, current_cancel
 
 
 def _check_bm25_ready(ctx: SessionContext, console: Console) -> None:
@@ -108,9 +102,6 @@ def run_repl(ctx: SessionContext) -> None:
         complete_while_typing=True,
     )
 
-    current_worker: threading.Thread | None = None
-    current_cancel: threading.Event | None = None
-
     try:
         while True:
             _check_bm25_ready(ctx, console)
@@ -133,28 +124,19 @@ def run_repl(ctx: SessionContext) -> None:
                 )
                 continue
 
-            current_worker, current_cancel = _handle_user_message(
-                ctx, user_input, console, current_worker, current_cancel,
-            )
+            _handle_user_message(ctx, user_input, console)
 
     except (EOFError, KeyboardInterrupt):
         console.print("\nGoodbye!")
     finally:
-        _cleanup(ctx, console, current_worker, current_cancel)
+        _cleanup(ctx, console)
 
 
 def _cleanup(
     ctx: SessionContext,
     console: Console,
-    current_worker: threading.Thread | None,
-    current_cancel: threading.Event | None,
 ) -> None:
     """Release resources at REPL exit."""
-    if current_worker is not None and current_worker.is_alive():
-        if current_cancel is not None:
-            current_cancel.set()
-        current_worker.join(timeout=2.0)
-
     ctx.logger.log_session_end(
         ctx.agent_ref.agent.thread_id,
         ctx.stats.message_count,
