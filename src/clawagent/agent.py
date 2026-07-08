@@ -1,22 +1,19 @@
 """Agent creation and invocation logic."""
 
-import json
+from __future__ import annotations
+
 import logging
-import os
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain.agents import create_agent as _create_agent
 from langchain.agents.middleware import before_model
-from langchain.chat_models import init_chat_model
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
-from pydantic import SecretStr
 
 try:
     from langchain_anthropic.middleware import AnthropicPromptCachingMiddleware
@@ -24,15 +21,25 @@ except ImportError:  # pragma: no cover
     AnthropicPromptCachingMiddleware = None  # type: ignore
 
 import clawagent.worker  # noqa: F401  # ensures worker classes are registered
-from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.compression import CompressionConfig, make_state_modifier
 from clawagent.config import PROJECT_ROOT, Settings
 from clawagent.memory.summarizer import ensure_session_entry
 from clawagent.memory.summarizer import save_messages as _save_messages
+from clawagent.model_factory import make_model as _make_model
 from clawagent.prompt_builder import PromptBuilder
 from clawagent.stream_events import StreamEvent
+from clawagent.stream_processor import (
+    StreamState,
+    emit_tool_events,
+    process_text_chunk,
+    process_tool_call_chunks,
+)
+from clawagent.stream_processor import (
+    extract_usage as _extract_usage,
+)
 from clawagent.tools import ALL_TOOLS
 from clawagent.tools.memory_tools import create_memory_tools
+from clawagent.types import AgentResponse, Usage
 from clawagent.utils import extract_text
 
 if TYPE_CHECKING:
@@ -42,21 +49,13 @@ logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
-_PROVIDER_KEY_ENV: dict[str, str] = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-}
-
-
-def _get_api_key(settings: Settings) -> str:
-    """Get API key for the current model provider from environment."""
-    env_var = _PROVIDER_KEY_ENV.get(settings.model_provider)
-    if env_var:
-        key = os.getenv(env_var, "")
-        if key:
-            return key
-    return settings.anthropic_api_key
+__all__ = [
+    "Agent",
+    "AgentResponse",
+    "Usage",
+    "create_agent",
+    "rebuild_graph",
+]
 
 
 def _ensure_memory_dir(path: str) -> str:
@@ -64,30 +63,6 @@ def _ensure_memory_dir(path: str) -> str:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return str(db_path.resolve())
-
-
-def _make_model(settings: Settings) -> Any:
-    """Build a chat model via init_chat_model, with optional key-pool wrapping."""
-    model = init_chat_model(
-        model=settings.model_name,
-        model_provider=settings.model_provider or None,
-        api_key=SecretStr(_get_api_key(settings)),
-        max_tokens=settings.max_tokens,
-        temperature=settings.temperature,
-        timeout=settings.request_timeout,
-    )
-
-    # Wrap with KeyPoolChatModel if a pool with keys is configured
-    pool = get_global_pool()
-    default_stats = pool.get_pool_stats("default")
-    if default_stats.get("total", 0) > 0:
-        model = KeyPoolChatModel(
-            pool=pool,
-            pool_name="default",
-            inner=model,
-        )
-
-    return model
 
 
 def _make_sys_prompt(
@@ -118,7 +93,9 @@ def _make_sys_prompt(
     )
 
 
-def _make_all_tools(delegate_tool: BaseTool | None, memory_tools: list[BaseTool] | None = None) -> list[BaseTool]:
+def _make_all_tools(
+    delegate_tool: BaseTool | None, memory_tools: list[BaseTool] | None = None
+) -> list[BaseTool]:
     """Return all tools including the given delegate_task closure and memory tools."""
     tools: list[BaseTool] = [*ALL_TOOLS]
     if delegate_tool is not None:
@@ -152,16 +129,17 @@ def _build_middleware(compression_config: CompressionConfig, model: Any) -> list
         )
     middleware.append(
         before_model(
-            lambda state, runtime: make_state_modifier(
-                config=compression_config, model=model
-            )(state)
+            lambda state, runtime: make_state_modifier(config=compression_config, model=model)(
+                state
+            )
         )
     )
     return middleware
 
 
 def create_agent(
-    settings: Settings, channel: str = "cli",
+    settings: Settings,
+    channel: str = "cli",
 ) -> tuple[CompiledStateGraph[Any], sqlite3.Connection, WorkerFactory, BaseTool]:
     """Build a tool-calling ReAct agent backed by Anthropic Claude.
 
@@ -174,7 +152,6 @@ def create_agent(
     """
     model = _make_model(settings)
 
-    # ─── Initialize WorkerFactory ────────────────────
     from clawagent.orchestrator.delegator import make_delegate_task
     from clawagent.worker.base import BaseWorker
     from clawagent.worker.factory import WorkerFactory
@@ -234,140 +211,6 @@ def rebuild_graph(
     )
 
 
-@dataclass
-class Usage:
-    """Token usage for a single agent invocation."""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_input_tokens: int = 0
-    cache_creation_input_tokens: int = 0
-    prompt_cache_hit_tokens: int = 0
-    prompt_cache_miss_tokens: int = 0
-
-    @classmethod
-    def from_response_metadata(cls, metadata: dict[str, Any]) -> Usage:
-        usage = metadata.get("usage", {})
-        if not usage:
-            return cls()
-        return cls(
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
-            cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
-            cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
-            prompt_cache_hit_tokens=usage.get("prompt_cache_hit_tokens", 0),
-            prompt_cache_miss_tokens=usage.get("prompt_cache_miss_tokens", 0),
-        )
-
-
-def _extract_usage(msg: Any) -> Usage:
-    """Extract Usage from message, checking usage_metadata first (ChatAnthropic)."""
-    usage_dict = getattr(msg, "usage_metadata", None)
-    if usage_dict:
-        return Usage(
-            input_tokens=usage_dict.get("input_tokens", 0),
-            output_tokens=usage_dict.get("output_tokens", 0),
-            cache_read_input_tokens=usage_dict.get("cache_read_input_tokens", 0),
-            cache_creation_input_tokens=usage_dict.get("cache_creation_input_tokens", 0),
-            prompt_cache_hit_tokens=usage_dict.get("prompt_cache_hit_tokens", 0),
-            prompt_cache_miss_tokens=usage_dict.get("prompt_cache_miss_tokens", 0),
-        )
-    meta = getattr(msg, "response_metadata", None) or {}
-    return Usage.from_response_metadata(meta)
-
-
-@dataclass
-class AgentResponse:
-    """Result of a single agent invocation."""
-
-    text: str
-    usage: Usage
-
-
-@dataclass
-class _StreamState:
-    """Mutable state shared across stream event processors."""
-
-    all_text: list[str] = field(default_factory=list)
-    tool_call_accum: dict[str, dict[str, str]] = field(default_factory=dict)
-    tool_calls_emitted: set[str] = field(default_factory=set)
-    in_thinking: bool = False
-    usage: Usage = field(default_factory=Usage)
-
-
-def _process_text_chunk(
-    chunk_text: object, state: _StreamState
-) -> Iterator[StreamEvent]:
-    """Process a text chunk from the agent/model node."""
-    if isinstance(chunk_text, list):
-        for block in chunk_text:
-            if not isinstance(block, dict):
-                continue
-            btype = block.get("type", "")
-            text = block.get("text", "") or block.get("thinking", "")
-            if btype == "thinking" and text:
-                if not state.in_thinking:
-                    state.in_thinking = True
-                    yield StreamEvent(kind="think_start")
-            elif btype == "text" and text:
-                if state.in_thinking:
-                    state.in_thinking = False
-                    yield StreamEvent(kind="think_end")
-                state.all_text.append(text)
-                yield StreamEvent(kind="token", node="agent", content=text)
-    elif isinstance(chunk_text, str) and chunk_text:
-        state.all_text.append(chunk_text)
-        yield StreamEvent(kind="token", node="agent", content=chunk_text)
-
-
-def _process_tool_call_chunks(msg_chunk: Any, state: _StreamState) -> None:
-    """Accumulate incremental tool call name/args chunks."""
-    tcc_list = getattr(msg_chunk, "tool_call_chunks", None)
-    if not tcc_list:
-        return
-    state.all_text.clear()
-    for tcc in tcc_list:
-        tc_id = tcc.get("id", "")
-        if not tc_id:
-            continue
-        if tc_id not in state.tool_call_accum:
-            state.tool_call_accum[tc_id] = {"name": "", "args": ""}
-        name_piece = tcc.get("name", "") or ""
-        args_piece = tcc.get("args", "") or ""
-        if name_piece:
-            state.tool_call_accum[tc_id]["name"] += name_piece
-        if args_piece:
-            state.tool_call_accum[tc_id]["args"] += args_piece
-
-
-def _emit_tool_events(
-    msg_chunk: Any, state: _StreamState
-) -> Iterator[StreamEvent]:
-    """Emit tool_call and tool_result events for a tools-node message."""
-    if state.in_thinking:
-        state.in_thinking = False
-        yield StreamEvent(kind="think_end")
-
-    for tc_id, acc in state.tool_call_accum.items():
-        if tc_id in state.tool_calls_emitted:
-            continue
-        name = acc["name"]
-        if not name:
-            continue
-        try:
-            args = json.loads(acc["args"]) if acc["args"] else {}
-        except (json.JSONDecodeError, ValueError):
-            args = {"raw": acc["args"]}
-        state.tool_calls_emitted.add(tc_id)
-        yield StreamEvent(kind="tool_call", node="agent", content=name,
-                          metadata={"args": args})
-
-    preview = str(getattr(msg_chunk, "content", ""))[:200]
-    yield StreamEvent(kind="tool_result", node="tools",
-                      content=getattr(msg_chunk, "name", ""),
-                      metadata={"preview": preview})
-
-
 class Agent:
     """Wrapper around the compiled LangGraph agent graph."""
 
@@ -405,7 +248,11 @@ class Agent:
         if self._factory is not None:
             self._factory.set_settings(settings)
         self._graph = rebuild_graph(
-            settings, self._db_path, self._conn, self._delegate_tool, channel=self._channel,
+            settings,
+            self._db_path,
+            self._conn,
+            self._delegate_tool,
+            channel=self._channel,
         )
 
     def _persist_turn(self, thread_id: str, user_msg: str, assistant_msg: str) -> None:
@@ -413,14 +260,20 @@ class Agent:
         if not self._db_path or not assistant_msg:
             return
         try:
-            _save_messages(self._db_path, thread_id, [
-                ("user", user_msg), ("assistant", assistant_msg),
-            ])
+            _save_messages(
+                self._db_path,
+                thread_id,
+                [
+                    ("user", user_msg),
+                    ("assistant", assistant_msg),
+                ],
+            )
             ensure_session_entry(self._db_path, thread_id, user_msg)
 
             self._turn_count += 1
             if self._turn_count % 5 == 1:
                 import threading
+
                 threading.Thread(
                     target=self._extract_prefs_async,
                     args=(thread_id, user_msg, assistant_msg),
@@ -429,12 +282,11 @@ class Agent:
         except Exception:
             logger.exception("Failed to persist turn thread_id=%s", thread_id)
 
-    def _extract_prefs_async(
-        self, thread_id: str, user_msg: str, assistant_msg: str
-    ) -> None:
+    def _extract_prefs_async(self, thread_id: str, user_msg: str, assistant_msg: str) -> None:
         """Background preference extraction — must not block user input."""
         try:
             from clawagent.memory.preferences import extract_preferences_from_messages
+
             extract_preferences_from_messages(
                 messages_text=user_msg + "\n" + assistant_msg,
                 session_id=thread_id,
@@ -474,12 +326,10 @@ class Agent:
 
         return AgentResponse(text=text, usage=usage)
 
-    def stream_events(
-        self, message: str, thread_id: str | None = None
-    ) -> Iterator[StreamEvent]:
+    def stream_events(self, message: str, thread_id: str | None = None) -> Iterator[StreamEvent]:
         """Stream agent execution at message-chunk granularity."""
         tid = thread_id or self._thread_id
-        state = _StreamState()
+        state = StreamState()
         current_node = "agent"
 
         try:
@@ -496,26 +346,28 @@ class Agent:
                     if node in ("agent", "model"):
                         chunk_text = getattr(msg_chunk, "content", None)
                         if chunk_text:
-                            yield from _process_text_chunk(chunk_text, state)
-                        _process_tool_call_chunks(msg_chunk, state)
+                            yield from process_text_chunk(chunk_text, state)
+                        process_tool_call_chunks(msg_chunk, state)
 
                         chunk_usage = _extract_usage(msg_chunk)
                         if chunk_usage.input_tokens > 0 or chunk_usage.output_tokens > 0:
                             state.usage = chunk_usage
 
                     elif node == "tools":
-                        yield from _emit_tool_events(msg_chunk, state)
+                        yield from emit_tool_events(msg_chunk, state)
                 except Exception as e:
                     logger.exception("Error processing chunk at node=%s", current_node)
                     yield StreamEvent(
-                        kind="error", node=current_node,
+                        kind="error",
+                        node=current_node,
                         content=f"{type(e).__name__}: {e}",
                     )
 
         except Exception as e:
             logger.exception("Stream failed at node=%s thread_id=%s", current_node, tid)
             yield StreamEvent(
-                kind="error", node=current_node,
+                kind="error",
+                node=current_node,
                 content=f"{type(e).__name__}: {e}",
             )
 
@@ -541,9 +393,7 @@ class Agent:
     def _extract_usage_fallback(self, thread_id: str) -> Usage:
         """Attempt to extract usage from graph state as fallback."""
         try:
-            final_state = self._graph.get_state(
-                {"configurable": {"thread_id": thread_id}}
-            )
+            final_state = self._graph.get_state({"configurable": {"thread_id": thread_id}})
             if final_state and final_state.values:
                 msgs = final_state.values.get("messages", [])
                 if msgs:
