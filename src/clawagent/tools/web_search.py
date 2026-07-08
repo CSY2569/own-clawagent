@@ -2,6 +2,7 @@
 
 import ipaddress
 import socket
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -272,11 +273,41 @@ def _fetch_and_extract(results: list[_SearchResult]) -> str:
     return "\n".join(lines)
 
 
-# Rate limiting — prevent IP bans from excessive Bing requests
-_last_search_time: float = 0.0
-_SEARCH_COOLDOWN: float = 2.0
-_MAX_CONSECUTIVE_ERRORS: int = 5
-_consecutive_errors: int = 0
+class _WebSearchRateLimiter:
+    """Thread-safe rate limiter and error counter for web_search."""
+
+    _SEARCH_COOLDOWN: float = 2.0
+    _MAX_CONSECUTIVE_ERRORS: int = 5
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_search_time: float = 0.0
+        self._consecutive_errors: int = 0
+
+    def should_disable(self) -> bool:
+        with self._lock:
+            return self._consecutive_errors >= self._MAX_CONSECUTIVE_ERRORS
+
+    def wait_cooldown(self) -> None:
+        with self._lock:
+            elapsed = time.time() - self._last_search_time
+        if elapsed < self._SEARCH_COOLDOWN:
+            time.sleep(self._SEARCH_COOLDOWN - elapsed)
+
+    def record_search(self) -> None:
+        with self._lock:
+            self._last_search_time = time.time()
+
+    def record_error(self) -> None:
+        with self._lock:
+            self._consecutive_errors += 1
+
+    def reset_errors(self) -> None:
+        with self._lock:
+            self._consecutive_errors = 0
+
+
+_rate_limiter = _WebSearchRateLimiter()
 
 
 @tool
@@ -295,24 +326,20 @@ def web_search(query: str) -> str:
     Args:
         query: 搜索关键词（中文直接用原句）。
     """
-    global _last_search_time, _consecutive_errors
-
-    if _consecutive_errors >= _MAX_CONSECUTIVE_ERRORS:
+    if _rate_limiter.should_disable():
         return (
             "[Search Error] Too many consecutive failures — "
             "web search temporarily disabled. Please wait before retrying."
         )
 
-    elapsed = time.time() - _last_search_time
-    if elapsed < _SEARCH_COOLDOWN:
-        time.sleep(_SEARCH_COOLDOWN - elapsed)
+    _rate_limiter.wait_cooldown()
 
     results, error = _do_search(query)
-    _last_search_time = time.time()
+    _rate_limiter.record_search()
 
     if error:
-        _consecutive_errors += 1
+        _rate_limiter.record_error()
         return error
 
-    _consecutive_errors = 0
+    _rate_limiter.reset_errors()
     return _format_summary(results) + _fetch_and_extract(results)
