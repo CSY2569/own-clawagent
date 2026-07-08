@@ -40,36 +40,31 @@ class KeyPoolTransport(httpx.BaseTransport):
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         last_response: httpx.Response | None = None
+        body = request.content
 
         for attempt in range(self._max_retries + 1):
-            # Inject current key into headers
+            headers = dict(request.headers)
             if self._current_key_api_key:
-                request.headers["x-api-key"] = self._current_key_api_key
+                headers["x-api-key"] = self._current_key_api_key
 
-            response = self._next.handle_request(request)
+            req = httpx.Request(
+                method=request.method,
+                url=request.url,
+                headers=headers,
+                content=body,
+            )
+            response = self._next.handle_request(req)
 
             if response.status_code in (429, 401) and self._pool and attempt < self._max_retries:
-                # Mark error on current key
-                if hasattr(self, "_current_key_record") and self._current_key_record:
+                if self._current_key_record:
                     self._pool.mark_error(self._current_key_record, response.status_code)
 
-                # Get next key
                 next_key = self._pool.get_key(self._pool_name)
                 if next_key is None:
                     return response
 
                 self._current_key_api_key = next_key.api_key
                 self._current_key_record = next_key
-
-                # Re-read the request body for retry (stream was consumed)
-                if hasattr(request, "read"):
-                    body = request.read()
-                    request = httpx.Request(
-                        method=request.method,
-                        url=request.url,
-                        headers=dict(request.headers),
-                        content=body,
-                    )
 
                 last_response = response
                 continue
