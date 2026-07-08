@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import signal
+import warnings
 from types import FrameType
-from typing import Any
+from typing import Any, ClassVar
 
 
 class CancelToken:
@@ -17,21 +18,37 @@ class CancelToken:
                 process(chunk)
 
     After the block (or interruption), the previous SIGINT handler is restored.
+
+    Limitation: SIGINT is process-global, so only ONE CancelToken should be
+    active at a time. Nested instances corrupt handler restoration — the
+    inner __exit__ restores the outer's handler, leaving the outer instance
+    unable to receive subsequent SIGINT. A RuntimeWarning is emitted if a
+    second instance enters while another is active.
     """
+
+    _active_count: ClassVar[int] = 0
 
     def __init__(self) -> None:
         self._cancelled: bool = False
         self._old_handler: Any = signal.SIG_DFL
 
-    # ── Context manager ──────────────────────────────────────
-
     def __enter__(self) -> CancelToken:
+        if CancelToken._active_count > 0:
+            warnings.warn(
+                "CancelToken already active in this process. Nested instances "
+                "corrupt SIGINT handler state — only one should be active at a time.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         self._cancelled = False
         self._old_handler = signal.signal(signal.SIGINT, self._handler)
+        CancelToken._active_count += 1
         return self
 
     def __exit__(self, *args: object) -> None:
         signal.signal(signal.SIGINT, self._old_handler)
+        if CancelToken._active_count > 0:
+            CancelToken._active_count -= 1
 
     # ── Signal handler (must be simple — signal-safe) ───────
 
