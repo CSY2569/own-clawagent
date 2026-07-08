@@ -94,6 +94,24 @@ class SessionManager:
         """Reserved — set per-channel ModelConfig (Direction 2)."""
         self._channel_models[channel_type] = model_cfg
 
+    def cleanup_expired(self) -> int:
+        """Drop sessions idle longer than TTL. Returns count evicted.
+
+        Called periodically by the gateway main loop (not on every access).
+        Distinct from capacity-driven eviction in _evict_if_needed.
+        """
+        now = time.time()
+        evicted = 0
+        stale_keys = [
+            key for key, entry in self._sessions.items()
+            if now - entry.last_active >= self._ttl
+        ]
+        for key in stale_keys:
+            entry = self._sessions.pop(key)
+            entry.agent.close()
+            evicted += 1
+        return evicted
+
     def close_all(self) -> None:
         """Close all managed Agent instances."""
         for entry in self._sessions.values():
@@ -129,12 +147,14 @@ class SessionManager:
         )
 
     def _evict_if_needed(self) -> None:
-        """LRU eviction — drop idle sessions when over capacity."""
-        now = time.time()
+        """LRU eviction — drop oldest sessions when over capacity.
+
+        Force-evicts the least-recently-used session regardless of TTL,
+        because exceeding max_sessions is a hard capacity constraint.
+        TTL-based cleanup is handled separately by cleanup_expired().
+        """
         while len(self._sessions) > self._max:
-            key, entry = next(iter(self._sessions.items()))
-            if now - entry.last_active < self._ttl:
-                break
+            key, _ = next(iter(self._sessions.items()))
             popped = self._sessions.pop(key)
             popped.agent.close()
 
