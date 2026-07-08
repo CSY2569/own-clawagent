@@ -2,34 +2,10 @@
 
 import json
 import re
-import sqlite3
 from pathlib import Path
 from typing import Any
 
-
-def _get_conn(db_path: str) -> sqlite3.Connection:
-    p = Path(db_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
-    conn.row_factory = sqlite3.Row
-    _ensure_table(conn)
-    return conn
-
-
-def _ensure_table(conn: sqlite3.Connection) -> None:
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS preferences (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            key TEXT NOT NULL,
-            value TEXT NOT NULL,
-            confidence REAL DEFAULT 0.5,
-            session_id TEXT,
-            evidence TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_preferences_key ON preferences(key)")
-    conn.commit()
+from clawagent.memory.summarizer import _get_cached_conn
 
 
 def save_preference(
@@ -41,14 +17,13 @@ def save_preference(
     confidence: float = 0.5,
 ) -> None:
     """Save or update a preference entry."""
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     conn.execute(
         """INSERT INTO preferences (key, value, confidence, session_id, evidence)
            VALUES (?, ?, ?, ?, ?)""",
         (key, value, confidence, session_id, evidence),
     )
     conn.commit()
-    conn.close()
 
 
 def load_top_preferences(db_path: str, limit: int = 5) -> list[dict[str, str]]:
@@ -57,7 +32,7 @@ def load_top_preferences(db_path: str, limit: int = 5) -> list[dict[str, str]]:
     if not path.exists():
         return []
 
-    conn = _get_conn(db_path)
+    conn = _get_cached_conn(db_path)
     rows = conn.execute(
         """SELECT key, value, MAX(confidence) as confidence
            FROM preferences
@@ -66,7 +41,6 @@ def load_top_preferences(db_path: str, limit: int = 5) -> list[dict[str, str]]:
            LIMIT ?""",
         (limit,),
     ).fetchall()
-    conn.close()
     return [{"key": r["key"], "value": r["value"]} for r in rows]
 
 

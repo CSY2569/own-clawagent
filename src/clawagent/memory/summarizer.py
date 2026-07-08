@@ -16,6 +16,7 @@ def _get_conn(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     _ensure_table(conn)
     _ensure_messages_table(conn)
+    _ensure_preferences_table(conn)
     return conn
 
 
@@ -64,6 +65,22 @@ def _ensure_messages_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_thread ON conversation_messages(thread_id)"
     )
+    conn.commit()
+
+
+def _ensure_preferences_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            confidence REAL DEFAULT 0.5,
+            session_id TEXT,
+            evidence TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_preferences_key ON preferences(key)")
     conn.commit()
 
 
