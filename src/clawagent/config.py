@@ -3,6 +3,7 @@
 import os
 import re
 import tomllib
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,6 +47,7 @@ class Settings:
     compression_summary_timeout: int = 30
     request_timeout: int = 120
     bm25_cache_secret: str = ""
+    max_result_chars: int = 50_000
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -54,31 +56,36 @@ class Settings:
             raise ValueError(
                 "ANTHROPIC_API_KEY not set. Copy .env.example to .env and add your key."
             )
-        context_window_raw = os.getenv("CLAWAGENT_CONTEXT_WINDOW", "1000000")
-        try:
-            context_window = int(context_window_raw)
-        except ValueError:
-            context_window = 1_000_000
         return cls(
             anthropic_api_key=api_key,
             model_name=os.getenv("CLAWAGENT_MODEL", "deepseek-v4-flash"),
             model_provider=os.getenv("CLAWAGENT_MODEL_PROVIDER", "anthropic"),
-            context_window=context_window,
+            context_window=_get_int_env("CLAWAGENT_CONTEXT_WINDOW", 1_000_000),
             memory_db_path=os.getenv("CLAWAGENT_MEMORY_DB", "memories/sessions.db"),
-            max_preferences=int(os.getenv("CLAWAGENT_MAX_PREFERENCES", "5")),
+            max_preferences=_get_int_env("CLAWAGENT_MAX_PREFERENCES", 5),
             agent_id=os.getenv("CLAWAGENT_AGENT_ID", "wenbao"),
             siliconflow_api_key=os.getenv("SILICONFLOW_API_KEY", ""),
             siliconflow_base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1/embeddings"),
             siliconflow_model=os.getenv("SILICONFLOW_MODEL", "Qwen/Qwen3-VL-Embedding-8B"),
-            siliconflow_dimensions=int(os.getenv("SILICONFLOW_DIMENSIONS", "768")),
+            siliconflow_dimensions=_get_int_env("SILICONFLOW_DIMENSIONS", 768),
             compression_strategy=os.getenv("COMPRESSION_STRATEGY", "trim"),
-            compression_max_messages=int(os.getenv("COMPRESSION_MAX_MESSAGES", "40")),
-            compression_max_tokens=int(os.getenv("COMPRESSION_MAX_TOKENS", "80000")),
-            compression_keep_recent=int(os.getenv("COMPRESSION_KEEP_RECENT", "6")),
-            compression_summary_timeout=int(os.getenv("COMPRESSION_SUMMARY_TIMEOUT", "30")),
-            request_timeout=int(os.getenv("CLAWAGENT_REQUEST_TIMEOUT", "120")),
+            compression_max_messages=_get_int_env("COMPRESSION_MAX_MESSAGES", 40),
+            compression_max_tokens=_get_int_env("COMPRESSION_MAX_TOKENS", 80_000),
+            compression_keep_recent=_get_int_env("COMPRESSION_KEEP_RECENT", 6),
+            compression_summary_timeout=_get_int_env("COMPRESSION_SUMMARY_TIMEOUT", 30),
+            request_timeout=_get_int_env("CLAWAGENT_REQUEST_TIMEOUT", 120),
             bm25_cache_secret=os.getenv("CLAWAGENT_BM25_CACHE_SECRET", ""),
+            max_result_chars=_get_int_env("CLAWAGENT_MAX_RESULT_CHARS", 50_000),
         )
+
+
+def _get_int_env(key: str, default: int) -> int:
+    """Read an environment variable as int, falling back to default on invalid value."""
+    raw = os.getenv(key, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 @dataclass
@@ -140,7 +147,18 @@ def _load_price_toml(path: Path) -> PriceBook:
 
 
 def _load_price_txt(path: Path) -> PriceBook:
-    """Parse legacy price.txt format (Chinese table from DeepSeek docs)."""
+    """Parse legacy price.txt format (Chinese table from DeepSeek docs).
+
+    Deprecated: prefer price.toml. The txt parser relies on a specific
+    Chinese table layout and only recognizes ``deepseek-*`` model names;
+    it breaks silently on minor format changes. Migrate to price.toml.
+    """
+    warnings.warn(
+        "price.txt parsing is deprecated; migrate to price.toml. "
+        "The txt parser is fragile and only recognizes deepseek-* models.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     text = path.read_text(encoding="utf-8")
 
     model_match = re.search(

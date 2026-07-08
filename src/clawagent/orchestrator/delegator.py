@@ -47,9 +47,12 @@ def make_delegate_task(factory: WorkerFactory) -> Any:
             return f"错误: {e}"
 
         try:
-            agent = worker.spawn(task, settings=factory.get_settings())
+            settings = factory.get_settings()
+            agent = worker.spawn(task, settings=settings)
             result: str = agent.run(task).text
-            max_len = 50_000
+            max_len = getattr(settings, "max_result_chars", 50_000)
+            if not isinstance(max_len, int):
+                max_len = 50_000
             if len(result) > max_len:
                 result = result[:max_len] + f"\n\n...（结果已截断，共 {len(result)} 字符）"
             return result
