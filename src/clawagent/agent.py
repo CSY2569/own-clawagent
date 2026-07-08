@@ -1,7 +1,7 @@
 """Agent creation and invocation logic."""
 
-import contextlib
 import json
+import logging
 import os
 import sqlite3
 from collections.abc import Iterator
@@ -37,6 +37,8 @@ from clawagent.utils import extract_text
 
 if TYPE_CHECKING:
     from clawagent.worker.factory import WorkerFactory
+
+logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
@@ -410,7 +412,7 @@ class Agent:
         """Save turn to conversation log, session index, and preference store."""
         if not self._db_path or not assistant_msg:
             return
-        with contextlib.suppress(Exception):
+        try:
             _save_messages(self._db_path, thread_id, [
                 ("user", user_msg), ("assistant", assistant_msg),
             ])
@@ -418,22 +420,43 @@ class Agent:
 
             self._turn_count += 1
             if self._turn_count % 5 == 1:
-                from clawagent.memory.preferences import extract_preferences_from_messages
-                extract_preferences_from_messages(
-                    messages_text=user_msg + "\n" + assistant_msg,
-                    session_id=thread_id,
-                    db_path=self._db_path,
-                )
+                import threading
+                threading.Thread(
+                    target=self._extract_prefs_async,
+                    args=(thread_id, user_msg, assistant_msg),
+                    daemon=True,
+                ).start()
+        except Exception:
+            logger.exception("Failed to persist turn thread_id=%s", thread_id)
+
+    def _extract_prefs_async(
+        self, thread_id: str, user_msg: str, assistant_msg: str
+    ) -> None:
+        """Background preference extraction — must not block user input."""
+        try:
+            from clawagent.memory.preferences import extract_preferences_from_messages
+            extract_preferences_from_messages(
+                messages_text=user_msg + "\n" + assistant_msg,
+                session_id=thread_id,
+                db_path=self._db_path,
+            )
+        except Exception:
+            logger.exception("Preference extraction failed thread_id=%s", thread_id)
 
     def close(self) -> None:
         """Release resources held by this agent, particularly the SQLite connection."""
         from clawagent.memory.summarizer import close_all_cached
 
         if self._conn:
-            with contextlib.suppress(Exception):
+            try:
                 self._conn.close()
+            except Exception:
+                logger.exception("Failed to close SQLite connection")
             self._conn = None
-        close_all_cached()
+        try:
+            close_all_cached()
+        except Exception:
+            logger.exception("Failed to close cached connections")
 
     def run(self, message: str, thread_id: str | None = None) -> AgentResponse:
         """Run the agent synchronously and return the response with usage."""
@@ -457,6 +480,7 @@ class Agent:
         """Stream agent execution at message-chunk granularity."""
         tid = thread_id or self._thread_id
         state = _StreamState()
+        current_node = "agent"
 
         try:
             for msg_chunk, metadata in self._graph.stream(
@@ -465,22 +489,35 @@ class Agent:
                 stream_mode="messages",
             ):
                 node = metadata.get("langgraph_node", "") if isinstance(metadata, dict) else ""
+                if node:
+                    current_node = node
 
-                if node in ("agent", "model"):
-                    chunk_text = getattr(msg_chunk, "content", None)
-                    if chunk_text:
-                        yield from _process_text_chunk(chunk_text, state)
-                    _process_tool_call_chunks(msg_chunk, state)
+                try:
+                    if node in ("agent", "model"):
+                        chunk_text = getattr(msg_chunk, "content", None)
+                        if chunk_text:
+                            yield from _process_text_chunk(chunk_text, state)
+                        _process_tool_call_chunks(msg_chunk, state)
 
-                    chunk_usage = _extract_usage(msg_chunk)
-                    if chunk_usage.input_tokens > 0 or chunk_usage.output_tokens > 0:
-                        state.usage = chunk_usage
+                        chunk_usage = _extract_usage(msg_chunk)
+                        if chunk_usage.input_tokens > 0 or chunk_usage.output_tokens > 0:
+                            state.usage = chunk_usage
 
-                elif node == "tools":
-                    yield from _emit_tool_events(msg_chunk, state)
+                    elif node == "tools":
+                        yield from _emit_tool_events(msg_chunk, state)
+                except Exception as e:
+                    logger.exception("Error processing chunk at node=%s", current_node)
+                    yield StreamEvent(
+                        kind="error", node=current_node,
+                        content=f"{type(e).__name__}: {e}",
+                    )
 
         except Exception as e:
-            yield StreamEvent(kind="error", content=f"{type(e).__name__}: {e}")
+            logger.exception("Stream failed at node=%s thread_id=%s", current_node, tid)
+            yield StreamEvent(
+                kind="error", node=current_node,
+                content=f"{type(e).__name__}: {e}",
+            )
 
         if state.usage.input_tokens == 0 and state.usage.output_tokens == 0:
             state.usage = self._extract_usage_fallback(tid)
@@ -512,5 +549,5 @@ class Agent:
                 if msgs:
                     return _extract_usage(msgs[-1])
         except Exception:
-            pass
+            logger.exception("Failed to extract usage fallback thread_id=%s", thread_id)
         return Usage()

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import importlib
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, ClassVar
@@ -17,6 +17,8 @@ from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.config import Settings
 from clawagent.prompt_builder import PromptBuilder
 from clawagent.worker.config import _WORKER_TOOL_MAP, WORKER_TOOLS, WorkerConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_tools(tool_names: list[str]) -> list[Any]:
@@ -183,12 +185,16 @@ class BaseWorker:
     def cleanup(self) -> None:
         """Destroy worker: close DB connection, release resources."""
         if self._agent is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._agent.close()
+            except Exception:
+                logger.exception("Failed to close worker agent role=%s", self.config.role)
             self._agent = None
         if self._conn is not None:
-            with contextlib.suppress(Exception):
+            try:
                 self._conn.close()
+            except Exception:
+                logger.exception("Failed to close worker DB role=%s", self.config.role)
             self._conn = None
 
     def _ensure_memory_db(self) -> str:
