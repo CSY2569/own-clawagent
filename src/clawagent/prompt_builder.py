@@ -21,6 +21,8 @@ class PromptBuilder:
         max_preferences: Max number of user preferences to inject.
     """
 
+    _PREF_CACHE_TTL: float = 60.0
+
     def __init__(
         self,
         prompts_dir: str | Path,
@@ -30,6 +32,8 @@ class PromptBuilder:
         self._prompts_dir = Path(prompts_dir)
         self._memory_db_path = memory_db_path
         self._max_preferences = max_preferences
+        self._pref_cache: list[dict[str, str]] | None = None
+        self._pref_cache_ts: float = 0.0
 
     def build(
         self,
@@ -105,12 +109,22 @@ class PromptBuilder:
         return None
 
     def _load_preferences(self) -> list[dict[str, str]]:
-        """Load user preferences from SQLite (Layer 5)."""
+        """Load user preferences from SQLite (Layer 5), with TTL cache."""
         if not self._memory_db_path:
             return []
+
+        import time
+
+        now = time.monotonic()
+        if self._pref_cache is not None and (now - self._pref_cache_ts) < self._PREF_CACHE_TTL:
+            return self._pref_cache
+
         from clawagent.memory.preferences import load_top_preferences
 
-        return load_top_preferences(self._memory_db_path, self._max_preferences)
+        prefs = load_top_preferences(self._memory_db_path, self._max_preferences)
+        self._pref_cache = prefs
+        self._pref_cache_ts = now
+        return prefs
 
     @staticmethod
     def _build_tools_section(delegate_tool: BaseTool | None = None) -> str:
