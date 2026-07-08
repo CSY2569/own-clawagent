@@ -1,6 +1,7 @@
 """Web search tool using Bing + trafilatura full-text extraction."""
 
 import ipaddress
+import socket
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
@@ -46,13 +47,30 @@ _PRIVATE_NETS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
 ]
 
 
+_DNS_TIMEOUT = 2.0
+
+
+def _resolve_hostname(hostname: str) -> list[str]:
+    """Resolve hostname to IP strings, with timeout to avoid blocking."""
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(socket.getaddrinfo, hostname, None)
+            infos = future.result(timeout=_DNS_TIMEOUT)
+        return [str(info[4][0]) for info in infos]
+    except (socket.gaierror, TimeoutError, OSError):
+        return []
+
+
+def _is_safe_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return not any(ip in net for net in _PRIVATE_NETS)
+
+
 def _is_safe_url(url: str) -> bool:
     """Check whether a URL points to a public internet address.
 
-    Blocks private / loopback / link-local / multicast IPs.  Domain-based URLs
-    are allowed — the DNS resolution and connection happen inside httpx,
-    which rejects responses directed to private IPs when used with a safe
-    resolver.
+    Blocks private / loopback / link-local / multicast IPs. For domain
+    hostnames, resolves DNS and rejects if any resolved IP is private
+    (prevents DNS-rebinding SSRF).
     """
     try:
         parsed = urlparse(url)
@@ -68,10 +86,21 @@ def _is_safe_url(url: str) -> bool:
 
     try:
         ip = ipaddress.ip_address(hostname)
+        return _is_safe_ip(ip)
     except ValueError:
-        return True
+        pass
 
-    return not any(ip in net for net in _PRIVATE_NETS)
+    ips = _resolve_hostname(hostname)
+    if not ips:
+        return False
+    for ip_str in ips:
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if not _is_safe_ip(ip):
+            return False
+    return True
 
 
 def _do_search(query: str) -> tuple[list[_SearchResult], str | None]:

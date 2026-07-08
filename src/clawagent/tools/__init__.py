@@ -27,12 +27,17 @@ from clawagent.config import PROJECT_ROOT
 
 
 def _resolve_path(path: str) -> Path:
-    """Resolve a path relative to project root and validate it's within bounds."""
+    """Resolve a path relative to project root and validate it's within bounds.
+
+    Uses Path.is_relative_to() for robust containment check — string prefix
+    matching is vulnerable to sibling-directory bypass (e.g. /home/u/foo vs
+    /home/u/fooevil).
+    """
     p = Path(path)
     if not p.is_absolute():
         p = PROJECT_ROOT / p
     p = p.resolve()
-    if not str(p).startswith(str(PROJECT_ROOT)):
+    if not p.is_relative_to(PROJECT_ROOT):
         raise ValueError(f"Path is outside the project directory: {path}")
     return p
 
@@ -84,11 +89,14 @@ def write_file(path: str, content: str) -> str:
         return f"Error writing file: {e}"
 
 
-# Dangerous commands blocked for security (with shell=False, pipes/redirects
-# are also prevented automatically since shlex.split rejects shell metacharacters).
-_DANGEROUS_COMMANDS: set[str] = {
-    "rm", "sudo", "chmod", "chown", "mkfs", "dd", "shutdown", "reboot",
-    "poweroff", "halt", "kill", "pkill", "killall",
+# Whititelist, not sandbox: python/docker can still run arbitrary code.
+# True isolation requires container/seccomp.
+_ALLOWED_COMMANDS: set[str] = {
+    "git", "uv", "ruff", "mypy", "pytest",
+    "python", "python3",
+    "ls", "cat", "echo", "grep", "find", "pwd",
+    "mkdir", "cp", "mv", "touch",
+    "docker", "npm",
 }
 
 
@@ -101,6 +109,9 @@ def run_command(command: str) -> str:
 
     The command runs from the project root directory. Use this for
     development tasks like building, testing, linting, or git operations.
+
+    Only commands in the whitelist are permitted; unknown commands are
+    rejected. This is defense-in-depth, not a true sandbox.
 
     Args:
         command: Command with arguments (e.g. "uv run ruff check .",
@@ -115,10 +126,11 @@ def run_command(command: str) -> str:
         return "Empty command"
 
     cmd_name = args[0]
-    if cmd_name in _DANGEROUS_COMMANDS:
+    if cmd_name not in _ALLOWED_COMMANDS:
+        allowed = ", ".join(sorted(_ALLOWED_COMMANDS))
         return (
-            f"Blocked: '{cmd_name}' is not permitted for safety reasons. "
-            "Destructive commands are disabled in this environment."
+            f"Blocked: '{cmd_name}' is not in the allowed command list. "
+            f"Allowed: {allowed}."
         )
 
     try:
