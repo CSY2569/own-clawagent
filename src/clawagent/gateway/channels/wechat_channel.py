@@ -20,6 +20,8 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import Future as CFuture
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from weixin_ilink import WeixinBot  # type: ignore[import-untyped]
@@ -44,6 +46,8 @@ class WechatChannel(IChannel):
         self._poll_future: asyncio.Future[None] | None = None
         self._stop_event = asyncio.Event()
         self._msg_count: int = 0
+        self._executor: ThreadPoolExecutor | None = None
+        self._pending_handler_future: CFuture[None] | None = None
 
     # ── IChannel interface ─────────────────────────────────────
 
@@ -68,6 +72,10 @@ class WechatChannel(IChannel):
 
         bot = self._bot
         logger.info("polling started (bot_id=%s)", getattr(bot, "account_id", "?"))
+
+        # Dedicated single-thread executor so the blocking long-poll
+        # never starves other run_in_executor callers on the default pool.
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wechat-poll")
 
         def _poll_loop() -> None:
             try:
@@ -95,9 +103,11 @@ class WechatChannel(IChannel):
                         self._consume_and_reply(handler, incoming, bot, wx_msg),
                         loop,
                     )
+                    self._pending_handler_future = future
                     try:
                         future.result(timeout=120)
                     except TimeoutError:
+                        future.cancel()
                         logger.warning(
                             "handler timed out for user=%s msg=%d",
                             wx_msg.from_user, self._msg_count,
@@ -107,26 +117,42 @@ class WechatChannel(IChannel):
                             "handler error for user=%s msg=%d",
                             wx_msg.from_user, self._msg_count,
                         )
+                    finally:
+                        self._pending_handler_future = None
 
             except Exception:
                 if not self._stop_event.is_set():
                     logger.exception("poll loop crashed after %d messages", self._msg_count)
 
         self._poll_future = asyncio.ensure_future(
-            loop.run_in_executor(None, _poll_loop)
+            loop.run_in_executor(self._executor, _poll_loop)
         )
         await self._poll_future
 
     async def stop(self) -> None:
         logger.info("stopping (processed %d messages)", self._msg_count)
         self._stop_event.set()
+
+        # Cancel any in-flight handler coroutine first so we don't
+        # block shutdown waiting on a half-streamed reply.
+        if self._pending_handler_future and not self._pending_handler_future.done():
+            self._pending_handler_future.cancel()
+
         if self._bot:
             self._bot.stop()
             self._bot = None
+
+        # Cancel the polling future (only relevant if bot.stop() didn't
+        # unblock messages() and the poll thread is still iterating).
         if self._poll_future and not self._poll_future.done():
             self._poll_future.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_future
+
+        if self._executor:
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+
         logger.info("stopped")
 
     # ── Message processing ─────────────────────────────────────
