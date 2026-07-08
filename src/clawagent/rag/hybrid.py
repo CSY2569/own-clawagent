@@ -10,7 +10,7 @@ class HybridSearcher:
     """KNN + BM25 hybrid retriever with Reciprocal Rank Fusion.
 
     Runs both retrievers in parallel, then merges results via RRF.
-    Text deduplication uses MD5 of the first 100 characters.
+    Text deduplication uses SHA256 of the full text (robust against collision and prefix-mismatch bugs).
 
     Args:
         knn_retriever: Callable(query, top_k) -> list[dict] backed by RAGStore.
@@ -116,5 +116,5 @@ class HybridSearcher:
 
     @staticmethod
     def _hash(text: str) -> str:
-        """Hash first 100 chars of text for dedup key."""
-        return hashlib.md5(text[:100].encode("utf-8")).hexdigest()
+        """Hash full text with SHA256 for dedup key."""
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
