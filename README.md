@@ -2,24 +2,26 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-A LangChain/LangGraph tool-calling agent powered by DeepSeek (via Anthropic-compatible API), with multi-agent orchestration, hybrid RAG, streaming display, and conversation memory.
+A LangChain/LangGraph tool-calling agent with multi-platform support (DeepSeek, Volcano Ark, OpenCode Go, OpenAI, Anthropic), multi-agent orchestration, hybrid RAG, streaming display, and conversation memory.
 
 ## Features
 
-- **Tool-calling agent** — 8+ built-in tools: 4 core tools (file I/O, shell commands, RAG document search), 3 memory tools (list/recall/summarize sessions, closure-factory pattern), web search, and multi-agent task delegation
-- **Multi-agent orchestration** — Orchestrator + 4 specialized Workers (Coder, Researcher, Critic, Writer). Complex tasks are decomposed and delegated via `delegate_task(role, task)`. Each Worker runs with an independent model, tool set, and prompt context. Settings hot-reload propagates automatically to WorkerFactory
-- **Real-time streaming display** — Token-level typewriter effect with Rich Live dashboard. Tool calls and results are shown as they execute. Supports DeepSeek thinking blocks (`think_start` / `think_end`)
-- **Ctrl+C instant interrupt** — Threaded producer-consumer pattern ensures ≤100ms response to cancellation, with graceful background cleanup
-- **Web search** — Researcher Worker uses Bing direct search + trafilatura full-text extraction with concurrent page fetching
-- **RAG (Retrieval-Augmented Generation)** — Hybrid search: KNN vector retrieval (Chroma, SiliconFlow embeddings) + BM25 lexical matching (jieba tokenizer) fused via Reciprocal Rank Fusion. BM25 index cache (SHA256-validated pickle) skips tokenization on restart when documents are unchanged
-- **API key pool** — Multi-key failover with exponential backoff per key. Supports `API_POOL_*` environment variables for automatic key rotation
-- **Multi-layer system prompt** — File-based assembly: identity, personality, workspace context, runtime metadata, user preferences, and auto-generated tool listing
-- **Conversation memory** — SQLite-backed session persistence with automatic summarization, user preference extraction, and JSONL logging per session. Connection cache with WAL mode avoids repeated connect/disconnect within a turn
-- **Context compression** — 3 strategies: message-count trim, token-estimate trim, or LLM-based summarization
-- **Settings hot-reload** — Switch model, temperature, max tokens, and compression strategy without restart
-- **Interactive REPL** — Rich-powered dashboard with live token tracking, cost estimation, slash-command autocomplete, and streaming output
-- **mypy zero errors** — Full strict-mode type checking across 50 source files
-- **352 passing tests** — Full coverage: agents, workers, tools, memory, RAG, compression, streaming, API pool, cancel token, and UI
+- **Multi-platform support** - 5 platforms out of the box: DeepSeek (default), Volcano Ark, OpenCode Go, OpenAI, Anthropic. Switch at runtime via `/platform`. Auto-fetch available models from each platform's API
+- **Tool-calling agent** - 8+ built-in tools: 4 core tools (file I/O, shell commands, RAG document search), 3 memory tools (list/recall/summarize sessions, closure-factory pattern), web search, and multi-agent task delegation
+- **Multi-agent orchestration** - Orchestrator + 4 specialized Workers (Coder, Researcher, Critic, Writer). Complex tasks are decomposed and delegated via `delegate_task(role, task)`. Each Worker runs with an independent model, tool set, and prompt context
+- **Real-time streaming display** - Token-level typewriter effect with Rich Live dashboard. Tool calls and results are shown as they execute. Supports thinking blocks (`think_start` / `think_end`)
+- **Ctrl+C instant interrupt** - Threaded producer-consumer pattern ensures ≤100ms response to cancellation, with graceful background cleanup
+- **Web search** - Researcher Worker uses Bing direct search + trafilatura full-text extraction with concurrent page fetching (thread-safe rate limiter)
+- **RAG (Retrieval-Augmented Generation)** - Hybrid search: KNN vector retrieval (Chroma, SiliconFlow embeddings) + BM25 lexical matching (jieba tokenizer) fused via Reciprocal Rank Fusion. BM25 index cache (JSON + HMAC signature) skips tokenization on restart
+- **API key pool** - Multi-key failover with exponential backoff per key. Supports `API_POOL_*` environment variables for automatic key rotation
+- **Multi-layer system prompt** - File-based assembly: identity, personality, workspace context, runtime metadata, user preferences (TTL-cached), and auto-generated tool listing
+- **Conversation memory** - SQLite-backed session persistence with automatic summarization, user preference extraction (background thread), and JSONL logging per session. Unified WAL connection cache across memory modules
+- **Context compression** - 3 strategies: message-count trim, token-estimate trim, or LLM-based summarization (with real timeout fallback)
+- **Gateway mode** - Multi-channel event loop (CLI, WeChat iLink Bot) with real streaming via asyncio.Queue bridge
+- **Settings hot-reload** - Switch platform, model, temperature, max tokens, and compression strategy without restart
+- **Interactive REPL** - Rich-powered dashboard with live token tracking, cost estimation, slash-command autocomplete, model discovery dialog, and streaming output
+- **mypy zero errors** - Full strict-mode type checking across 71 source files
+- **379 passing tests** - Full coverage: agents, workers, tools, memory, RAG, compression, streaming, API pool, cancel token, gateway, and UI
 
 ## Quick Start
 
@@ -35,7 +37,7 @@ git clone git@github.com:<user>/clawagent.git
 cd clawagent
 uv sync
 cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY
+# Edit .env and set CLAWAGENT_API_KEY
 ```
 
 ### Usage
@@ -46,6 +48,9 @@ uv run clawagent "What time is it?"
 
 # Interactive REPL
 uv run clawagent
+
+# Gateway mode (WeChat + CLI channels)
+uv run clawagent gateway
 ```
 
 ## Interactive Commands
@@ -57,7 +62,9 @@ The REPL supports slash commands with autocomplete (type `/`):
 | `/sessions` | List all historical sessions |
 | `/load <id>` | Load and switch to a session |
 | `/new` | Start a new session |
-| `/model <name>` | Switch model (e.g. `deepseek-v4-pro`) |
+| `/model` | Switch model (no args = interactive dialog, or `platform:model_name`) |
+| `/models` | List available models from current platform (`/models refresh` to clear cache) |
+| `/platform` | Switch platform (no args = list, or `ark` / `deepseek` / `opencode-go` / `openai` / `anthropic`) |
 | `/temp <n>` | Set temperature (e.g. `0.7`) |
 | `/max-tokens <n>` | Set max output tokens (e.g. `8192`) |
 | `/compress <strategy>` | Switch compression (`trim` / `token_trim` / `summarize`) |
@@ -68,7 +75,101 @@ The REPL supports slash commands with autocomplete (type `/`):
 
 Press **Ctrl+C** during streaming to instantly cancel the current generation and return to the prompt.
 
+## Multi-Platform Support
+
+Switch between 5 platforms at runtime without restarting:
+
+| Platform | Provider | Endpoint | Key Env Var |
+|----------|----------|----------|-------------|
+| `deepseek` (default) | OpenAI-compatible | `https://api.deepseek.com/v1` | `DEEPSEEK_API_KEY` |
+| `ark` | OpenAI-compatible | `https://ark.cn-beijing.volces.com/api/v3` | `ARK_API_KEY` |
+| `opencode-go` | OpenAI-compatible | `https://opencode.ai/zen/go/v1` | `OPENCODE_GO_API_KEY` |
+| `openai` | OpenAI native | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| `anthropic` | Anthropic native | `https://api.anthropic.com` | `ANTHROPIC_API_KEY` |
+
+Each platform has a `fallback_models` list used when the `/models` endpoint is unavailable. Model discovery fetches from the platform's `/models` API with a 5-minute TTL cache.
+
+```bash
+# Switch platform (auto-shows model selection dialog)
+/platform opencode-go
+
+# List available models
+/models
+
+# Switch model interactively
+/model
+
+# Switch model directly
+/model ark:doubao-seed-2-0-pro-260215
+```
+
 ## Architecture
+
+### Module Structure
+
+```
+src/clawagent/
+├── config.py              # Settings dataclass, price book
+├── platforms.py           # Platform presets (5 platforms)
+├── model_factory.py       # Chat model factory (platform-aware)
+├── model_discovery.py     # Fetch available models from platform APIs
+├── agent.py               # Agent class, create_agent, rebuild_graph
+├── types.py               # Usage, AgentResponse dataclasses
+├── stream_processor.py    # Stream event processor (OpenAI + Anthropic compat)
+├── stream_events.py       # Stream event type definitions
+├── prompt_builder.py      # Multi-layer prompt assembly (TTL-cached prefs)
+├── main.py                # CLI entry point, REPL loop
+├── ui.py                  # Rich dashboard, stats, formatting
+├── ui_stream.py           # Streaming display (spinner, tokens, tool log)
+├── cancel_token.py        # Ctrl+C cooperative cancellation
+├── conversation_log.py    # Per-session JSONL logging
+├── cli/                   # CLI commands and display helpers
+│   ├── commands.py        #   Slash-command handling (/model /models /platform ...)
+│   └── display.py         #   Session listing and formatting
+├── gateway/               # Multi-channel gateway (WeChat, CLI)
+│   ├── server.py          #   asyncio.Queue real-streaming message handler
+│   ├── session_manager.py #   LRU + TTL session management
+│   └── channels/          #   WeChat iLink Bot channel
+├── api_pool/              # API key pool with failover
+│   ├── pool.py            #   ApiKeyPool core
+│   ├── loader.py          #   Environment variable loading
+│   ├── models.py          #   KeyRecord, PoolConfig, KeyStatus
+│   ├── wrapper.py         #   KeyPoolChatModel wrapper (cross-provider)
+│   ├── transport.py       #   Custom HTTP transport (deep-copy headers)
+│   └── callbacks.py       #   Streaming callback support
+├── tools/
+│   ├── __init__.py        #   Core tools (read, write, shell, search)
+│   ├── memory_tools.py    #   Session list/recall/summarize (closure factory)
+│   ├── rag_tool.py        #   RAG search_documents tool
+│   └── web_search.py      #   Bing search + trafilatura (thread-safe)
+├── memory/
+│   ├── summarizer.py      #   Session summarization + unified WAL connection cache
+│   └── preferences.py     #   User preference extraction & querying
+├── orchestrator/
+│   └── delegator.py       #   delegate_task tool (configurable truncation)
+├── worker/
+│   ├── base.py            #   BaseWorker abstract class
+│   ├── factory.py         #   WorkerFactory (creates workers by role)
+│   ├── config.py          #   Worker configuration from env vars
+│   ├── registry.py        #   @register_worker decorator
+│   ├── coder.py           #   Code writing worker
+│   ├── researcher.py      #   Web search + RAG worker
+│   ├── critic.py          #   Code review worker
+│   └── writer.py          #   Documentation worker
+├── compression/
+│   ├── __init__.py        #   Entry point + pre_model_hook
+│   ├── config.py          #   CompressionConfig
+│   ├── strategies.py      #   trim / token_trim / summarize (real timeout)
+│   └── counters.py        #   Token estimation
+└── rag/
+    ├── bootstrap.py       #   RAG system initialization + BM25 cache
+    ├── embedding.py       #   SiliconFlow cloud embedding client
+    ├── store.py           #   Chroma vector store
+    ├── chunker.py         #   Fixed-window text chunking
+    ├── bm25.py            #   BM25 lexical retriever (jieba) + JSON+HMAC cache
+    ├── hybrid.py          #   KNN + BM25 hybrid with RRF fusion (SHA256 dedup)
+    └── ingest.py          #   Document ingestion CLI
+```
 
 ### Multi-Agent Orchestration
 
@@ -83,105 +184,41 @@ Complex tasks are automatically decomposed by the Orchestrator and delegated to 
 
 Each Worker is an independent, temporary Agent with its own model configuration, prompt identity, and tool set. Workers are created on demand and destroyed after task completion. Runtime settings (model, temperature) are automatically propagated to workers via hot-reload.
 
-### Streaming Display
-
-The REPL displays agent execution in real-time:
-
-```
-  ⠋ Calling search_documents("龙神恩雅")...
-  ✓ search_documents (6 lines)
-  ✓ read_file (152 lines)
-  ──────────────────────────────────────────
-  From Dawn of Swords, Enya did not completely vanish...
-
-  In 1,230 · Out 340
-```
-
-- Animated spinner while thinking
-- Live tool call tracking with argument preview
-- Token-level typewriter output
-- DeepSeek thinking block detection (`think_start` / `think_end`)
-- Token usage and cost stats on completion
-
-### Prompt System
-
-The system prompt is assembled by `PromptBuilder` from five layers:
-
-| Layer | Source | Required |
-|-------|--------|----------|
-| 1. Identity | `prompts/agents/{id}/identity.md` | Yes (with fallback) |
-| 2. Personality | `prompts/agents/{id}/soul.md` | No |
-| 3. Workspace | `prompts/shared/bootstrap.md`, `agents.md`, `search-rules.md` | No |
-| 4. Runtime | Agent ID, timestamp, channel (auto-generated) | Yes |
-| 5. Preferences | SQLite `preferences` table (auto-learned) | No |
-
-Tools are auto-listed from `ALL_TOOLS + delegate_task` — add a new `@tool` and it appears automatically.
-
-To add a new agent: create `prompts/agents/<name>/identity.md` and set `CLAWAGENT_AGENT_ID=<name>`.
-
-### RAG (Retrieval-Augmented Generation)
-
-Agentic RAG — the LLM decides when to search documents via the `search_documents` tool.
-
-- **Hybrid search**: KNN vector retrieval (Chroma HNSW) + BM25 lexical matching (jieba) fused via Reciprocal Rank Fusion
-- **Embedding**: SiliconFlow cloud API (`Qwen/Qwen3-VL-Embedding-8B`, 768 dimensions)
-- **Chapter metadata**: Auto-detects chapter markers during ingestion
-- **Background BM25**: Index builds in background thread; graceful fallback to KNN-only during construction
-
-```bash
-# Ingest documents (run once)
-uv run python -m clawagent.rag.ingest docs/ --chunk-size 512 --overlap 64
-
-# Test from CLI
-uv run clawagent
-> /rag-search keyword
-```
-
-### API Key Pool
-
-Automatic key failover with per-key exponential backoff:
-
-```bash
-# .env
-API_POOL_DEFAULT_KEYS=sk-key1,sk-key2,sk-key3
-```
-
-When one key hits rate limits or errors, the pool automatically rotates to the next. Failed keys are cooled off with exponential backoff. Keys can also be loaded from a JSON file via `API_POOL_DEFAULT_KEY_FILE`.
-
-### Web Search
-
-The Researcher Worker performs live web searches:
-
-- **Bing direct search** — scrapes Bing search result pages
-- **trafilatura extraction** — fetches and extracts clean article text from top results
-- **Concurrent fetching** — uses `ThreadPoolExecutor` for parallel page retrieval
-- Configurable limits: max search results, max deep pages, page timeout
-
 ## Configuration
 
 Environment variables (set in `.env`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | *(required)* | DeepSeek API key |
-| `ANTHROPIC_BASE_URL` | — | API base URL (DeepSeek: `https://api.deepseek.com/anthropic`) |
+| `CLAWAGENT_API_KEY` | *(required)* | API key (fallback for all platforms) |
+| `CLAWAGENT_PLATFORM` | `deepseek` | Platform: `deepseek` / `ark` / `opencode-go` / `openai` / `anthropic` |
 | `CLAWAGENT_MODEL` | `deepseek-v4-flash` | Model name |
-| `CLAWAGENT_MODEL_PROVIDER` | `anthropic` | Provider (`anthropic`, `openai`, etc.) |
+| `CLAWAGENT_MODEL_PROVIDER` | `openai` | LangChain provider (`openai`, `anthropic`) |
+| `CLAWAGENT_API_BASE` | *(from platform)* | Custom API base URL (overrides platform preset) |
 | `CLAWAGENT_AGENT_ID` | `wenbao` | Agent identity (`prompts/agents/<id>/`) |
 | `CLAWAGENT_CONTEXT_WINDOW` | `1000000` | Context window size (for display) |
 | `CLAWAGENT_MEMORY_DB` | `memories/sessions.db` | SQLite memory database path |
 | `CLAWAGENT_MAX_PREFERENCES` | `5` | Max preferences injected into prompt |
+| `CLAWAGENT_MAX_RESULT_CHARS` | `50000` | Max chars for worker delegation results |
 | `CLAWAGENT_REQUEST_TIMEOUT` | `120` | API request timeout in seconds |
 | `COMPRESSION_STRATEGY` | `trim` | Context compression strategy |
 | `COMPRESSION_MAX_MESSAGES` | `40` | Max messages before trimming |
 | `COMPRESSION_MAX_TOKENS` | `80000` | Token threshold for `token_trim` |
 | `COMPRESSION_KEEP_RECENT` | `6` | Recent messages to preserve |
 | `API_POOL_DEFAULT_KEYS` | *(optional)* | Comma-separated API keys for pool |
-| `API_POOL_DEFAULT_KEY_FILE` | *(optional)* | JSON file with API keys |
 | `SILICONFLOW_API_KEY` | *(optional)* | SiliconFlow key for RAG embedding |
-| `SILICONFLOW_BASE_URL` | `https://api.siliconflow.cn/v1/embeddings` | Embedding API URL |
-| `SILICONFLOW_MODEL` | `Qwen/Qwen3-VL-Embedding-8B` | Embedding model |
-| `SILICONFLOW_DIMENSIONS` | `768` | Embedding dimensions |
+
+### Per-Platform Keys
+
+Each platform reads its own key env var first, falling back to `CLAWAGENT_API_KEY`:
+
+| Platform | Key Env Var |
+|----------|-------------|
+| deepseek | `DEEPSEEK_API_KEY` |
+| ark | `ARK_API_KEY` |
+| opencode-go | `OPENCODE_GO_API_KEY` |
+| openai | `OPENAI_API_KEY` |
+| anthropic | `ANTHROPIC_API_KEY` |
 
 ### Worker Configuration
 
@@ -190,107 +227,13 @@ Each Worker can use a different model/provider:
 ```bash
 # Common defaults (fallback)
 WORKER_COMMON_MODEL=deepseek-v4-flash
+WORKER_COMMON_MODEL_PROVIDER=openai
 
 # Per-worker overrides
 WORKER_CODER_MODEL=deepseek-v4-flash
 WORKER_RESEARCHER_MODEL=Qwen/Qwen3-235B-A22B
 WORKER_RESEARCHER_MODEL_PROVIDER=openai
 WORKER_RESEARCHER_API_BASE=https://api.siliconflow.cn/v1
-WORKER_CRITIC_MODEL=Qwen/Qwen3-235B-A22B
-WORKER_CRITIC_MODEL_PROVIDER=openai
-WORKER_CRITIC_API_BASE=https://api.siliconflow.cn/v1
-WORKER_WRITER_MODEL=deepseek-v4-flash
-```
-
-## Project Structure
-
-```
-src/clawagent/
-├── config.py              # Settings dataclass, price book
-├── agent.py               # Agent factory, run/stream_events/reconfigure
-├── prompt_builder.py      # Multi-layer prompt assembly
-├── main.py                # CLI entry point, REPL loop
-├── ui.py                  # Rich dashboard, stats, formatting
-├── ui_stream.py           # Streaming display (spinner, tokens, tool log)
-├── stream_events.py       # Stream event type definitions
-├── cancel_token.py        # Ctrl+C cooperative cancellation
-├── conversation_log.py    # Per-session JSONL logging
-├── cli/                   # CLI commands and display helpers
-│   ├── commands.py        #   Slash-command handling
-│   └── display.py         #   Session listing and formatting
-├── api_pool/              # API key pool with failover
-│   ├── pool.py            #   ApiKeyPool core
-│   ├── loader.py          #   Environment variable loading
-│   ├── models.py          #   KeyRecord, PoolConfig, KeyStatus
-│   ├── wrapper.py         #   KeyPoolChatModel wrapper
-│   ├── transport.py       #   Custom HTTP transport
-│   └── callbacks.py       #   Streaming callback support
-├── tools/
-│   ├── __init__.py        #   Core tools (read, write, shell, search)
-│   ├── memory_tools.py    #   Session list/recall/summarize (closure factory)
-│   ├── rag_tool.py        #   RAG search_documents tool
-│   └── web_search.py      #   Bing search + trafilatura extraction
-├── memory/
-│   ├── summarizer.py      #   Session summarization & message persistence
-│   └── preferences.py     #   User preference extraction & querying
-├── orchestrator/
-│   └── delegator.py       #   delegate_task tool for worker delegation
-├── worker/
-│   ├── base.py            #   BaseWorker abstract class
-│   ├── factory.py         #   WorkerFactory (creates workers by role)
-│   ├── config.py          #   Worker configuration from env vars
-│   ├── registry.py        #   @register_worker decorator
-│   ├── coder.py           #   Code writing worker
-│   ├── researcher.py      #   Web search + RAG worker
-│   ├── critic.py          #   Code review worker
-│   └── writer.py          #   Documentation worker
-├── compression/
-│   ├── __init__.py        #   Entry point + pre_model_hook
-│   ├── config.py          #   CompressionConfig
-│   ├── strategies.py      #   trim / token_trim / summarize
-│   └── counters.py        #   Token estimation
-└── rag/
-    ├── bootstrap.py       #   RAG system initialization + BM25 cache
-    ├── embedding.py       #   SiliconFlow cloud embedding client
-    ├── store.py           #   Chroma vector store
-    ├── chunker.py         #   Fixed-window text chunking
-    ├── bm25.py            #   BM25 lexical retriever (jieba) + pickle cache
-    ├── hybrid.py          #   KNN + BM25 hybrid with RRF fusion
-    └── ingest.py          #   Document ingestion CLI
-
-prompts/
-├── agents/wenbao/         # Default agent prompt files
-│   ├── identity.md
-│   └── soul.md
-├── shared/                # Shared workspace context
-│   ├── bootstrap.md
-│   ├── agents.md
-│   └── search-rules.md
-└── README.md
-
-tests/                     # 352 tests (22 files)
-├── test_agent.py          # Agent wrapper (Usage, AgentResponse)
-├── test_api_pool.py       # API key pool
-├── test_cancel_token.py   # Ctrl+C cancellation
-├── test_compression.py    # Context compression
-├── test_config.py         # Settings + price book
-├── test_conversation_log.py
-├── test_functional.py     # End-to-end agent graph integration
-├── test_memory_tools.py   # Memory tool interface (closure factory)
-├── test_orchestrator.py   # delegate_task delegation
-├── test_preferences.py    # User preference extraction
-├── test_rag.py            # RAG: chunker, BM25 (incl. cache), bootstrap
-├── test_stream_events.py  # Stream events + UI display
-├── test_streaming.py      # Streaming integration
-├── test_summarizer.py     # Session summarization
-├── test_tools.py          # Core tools
-├── test_ui.py             # UI stats/formatting
-├── test_web_search.py     # Web search
-├── test_worker_base.py    # Worker lifecycle
-├── test_worker_config.py  # Worker env var loading
-├── test_worker_factory.py # WorkerFactory
-├── test_worker_impl.py    # Individual worker behavior
-└── test_worker_registry.py
 ```
 
 ## Development
@@ -302,13 +245,10 @@ uv sync
 # Lint
 uv run ruff check .
 
-# Format
-uv run ruff format .
-
-# Type check (0 errors, 50 source files)
+# Type check (0 errors, 71 source files)
 uv run mypy src/
 
-# Run tests (352 tests)
+# Run tests (379 tests)
 uv run pytest tests/ -v
 
 # Run specific test file
