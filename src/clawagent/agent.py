@@ -116,10 +116,24 @@ def _make_compression_config(settings: Settings) -> CompressionConfig:
     )
 
 
-def _build_middleware(compression_config: CompressionConfig, model: Any) -> list[Any]:
-    """Build middleware list: prompt caching + context compression."""
+def _is_anthropic_provider(settings: Settings) -> bool:
+    """Check whether the current platform/provider is Anthropic-native.
+
+    Only Anthropic-native models support prompt caching middleware.
+    OpenAI-compatible providers (deepseek/ark/opencode-go/openai)
+    should skip it to avoid unnecessary overhead.
+    """
+    if settings.platform:
+        return settings.platform == "anthropic"
+    return settings.model_provider == "anthropic"
+
+
+def _build_middleware(
+    compression_config: CompressionConfig, model: Any, settings: Settings
+) -> list[Any]:
+    """Build middleware list: prompt caching (Anthropic only) + context compression."""
     middleware: list[Any] = []
-    if AnthropicPromptCachingMiddleware is not None:
+    if AnthropicPromptCachingMiddleware is not None and _is_anthropic_provider(settings):
         middleware.append(
             AnthropicPromptCachingMiddleware(
                 type="ephemeral",
@@ -170,7 +184,7 @@ def create_agent(
     memory_tools = create_memory_tools(db_path, model)
 
     compression_config = _make_compression_config(settings)
-    middleware = _build_middleware(compression_config, model)
+    middleware = _build_middleware(compression_config, model, settings)
 
     graph = _create_agent(
         model=model,
@@ -200,7 +214,7 @@ def rebuild_graph(
     memory_tools = create_memory_tools(db_path, model)
 
     compression_config = _make_compression_config(settings)
-    middleware = _build_middleware(compression_config, model)
+    middleware = _build_middleware(compression_config, model, settings)
 
     return _create_agent(
         model=model,

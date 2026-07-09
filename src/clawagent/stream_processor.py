@@ -62,14 +62,20 @@ def process_text_chunk(chunk_text: object, state: StreamState) -> Iterator[Strea
 
 
 def process_tool_call_chunks(msg_chunk: Any, state: StreamState) -> None:
-    """Accumulate incremental tool call name/args chunks."""
+    """Accumulate incremental tool call name/args chunks.
+
+    Handles both Anthropic and OpenAI streaming formats. OpenAI may
+    send the first chunk without an ``id``, using ``index`` instead.
+    We fall back to ``index`` as a synthetic ID to avoid dropping
+    the initial name/args fragments.
+    """
     tcc_list = getattr(msg_chunk, "tool_call_chunks", None)
     if not tcc_list:
         return
     state.all_text.clear()
     for tcc in tcc_list:
-        tc_id = tcc.get("id", "")
-        if not tc_id:
+        tc_id = tcc.get("id", "") or str(tcc.get("index", ""))
+        if not tc_id or tc_id == "None":
             continue
         if tc_id not in state.tool_call_accum:
             state.tool_call_accum[tc_id] = {"name": "", "args": ""}
