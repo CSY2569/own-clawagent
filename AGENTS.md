@@ -45,9 +45,9 @@ The project uses `langchain.chat_models.init_chat_model` which supports any prov
 
 If you add a Worker with `model_provider=ollama`, you must add `langchain-ollama` to `pyproject.toml`. Same for `bedrock`, `groq`, etc. The error is `ImportError: Initializing ChatXxx requires the langchain-xxx package`.
 
-### ANTHROPIC_API_KEY is misleading
+### Multi-platform support
 
-Despite the name, `ANTHROPIC_API_KEY` holds a **DeepSeek** API key. The `ANTHROPIC_BASE_URL` points to `https://api.deepseek.com/anthropic` (Anthropic-compatible endpoint). Do not rename this env var without updating `config.py:_get_api_key()` and the `.env.example`.
+The project supports 5 platforms via `platforms.py` presets: `deepseek` (default), `ark`, `opencode-go`, `openai`, `anthropic`. Switch at runtime with `/platform <name>` or set `CLAWAGENT_PLATFORM` in `.env`. Each platform preset bundles `model_provider`, `api_base`, `api_key_env`, and `fallback_models`. Use `/models` to list available models from the current platform (fetched from the platform's `/models` endpoint, with fallback to the preset list). `/model` without arguments shows a numbered selection dialog.
 
 ### Worker env var discovery is automatic
 
