@@ -16,11 +16,19 @@ from clawagent.api_pool.transport import KeyPoolTransport
 
 
 def _inject_key(inner: Any, api_key: str, api_base: str = "") -> None:
-    """Inject an API key into the inner ChatAnthropic / Anthropic client."""
+    """Inject an API key into the inner chat model client.
+
+    Supports both ChatAnthropic (anthropic_api_key) and ChatOpenAI
+    (openai_api_key) attribute names for cross-provider compatibility.
+    """
     if hasattr(inner, "anthropic_api_key"):
         inner.anthropic_api_key = api_key
+    if hasattr(inner, "openai_api_key"):
+        inner.openai_api_key = api_key
     if api_base and hasattr(inner, "anthropic_api_url"):
         inner.anthropic_api_url = api_base
+    if api_base and hasattr(inner, "openai_api_base"):
+        inner.openai_api_base = api_base
 
 
 class KeyPoolChatModel(BaseChatModel):

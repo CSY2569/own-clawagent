@@ -47,7 +47,7 @@ class ModelConfig:
         from clawagent.config import Settings
 
         return Settings(
-            anthropic_api_key=self.api_key or base.anthropic_api_key,
+            api_key=self.api_key or base.api_key,
             model_name=self.model_name or base.model_name,
             model_provider=self.model_provider or base.model_provider,
             max_tokens=self.max_tokens if self.max_tokens is not None else base.max_tokens,
@@ -68,6 +68,10 @@ class ModelConfig:
             compression_keep_recent=base.compression_keep_recent,
             compression_summary_timeout=base.compression_summary_timeout,
             request_timeout=self.request_timeout or base.request_timeout,
+            bm25_cache_secret=base.bm25_cache_secret,
+            max_result_chars=base.max_result_chars,
+            platform=base.platform,
+            api_base=self.api_base or base.api_base,
         )
 
     @classmethod

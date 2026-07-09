@@ -125,7 +125,7 @@ class BaseWorker:
 
         api_key = self.config.api_key
         if not api_key:
-            api_key = settings.anthropic_api_key
+            api_key = settings.api_key
 
         kwargs: dict[str, Any] = {
             "api_key": api_key,

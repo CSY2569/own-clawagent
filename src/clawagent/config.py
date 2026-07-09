@@ -27,9 +27,9 @@ _load_env()
 class Settings:
     """Application settings sourced from environment variables."""
 
-    anthropic_api_key: str
+    api_key: str
     model_name: str = "deepseek-v4-flash"
-    model_provider: str = "anthropic"
+    model_provider: str = "openai"
     max_tokens: int = 4096
     temperature: float = 0.0
     context_window: int = 1_000_000
@@ -48,18 +48,20 @@ class Settings:
     request_timeout: int = 120
     bm25_cache_secret: str = ""
     max_result_chars: int = 50_000
+    platform: str = "deepseek"
+    api_base: str = ""
 
     @classmethod
     def from_env(cls) -> Settings:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        api_key = os.getenv("CLAWAGENT_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError(
-                "ANTHROPIC_API_KEY not set. Copy .env.example to .env and add your key."
+                "CLAWAGENT_API_KEY not set. Copy .env.example to .env and add your key."
             )
         return cls(
-            anthropic_api_key=api_key,
+            api_key=api_key,
             model_name=os.getenv("CLAWAGENT_MODEL", "deepseek-v4-flash"),
-            model_provider=os.getenv("CLAWAGENT_MODEL_PROVIDER", "anthropic"),
+            model_provider=os.getenv("CLAWAGENT_MODEL_PROVIDER", "openai"),
             context_window=_get_int_env("CLAWAGENT_CONTEXT_WINDOW", 1_000_000),
             memory_db_path=os.getenv("CLAWAGENT_MEMORY_DB", "memories/sessions.db"),
             max_preferences=_get_int_env("CLAWAGENT_MAX_PREFERENCES", 5),
@@ -76,6 +78,8 @@ class Settings:
             request_timeout=_get_int_env("CLAWAGENT_REQUEST_TIMEOUT", 120),
             bm25_cache_secret=os.getenv("CLAWAGENT_BM25_CACHE_SECRET", ""),
             max_result_chars=_get_int_env("CLAWAGENT_MAX_RESULT_CHARS", 50_000),
+            platform=os.getenv("CLAWAGENT_PLATFORM", "deepseek"),
+            api_base=os.getenv("CLAWAGENT_API_BASE", ""),
         )
 
 

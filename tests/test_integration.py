@@ -31,7 +31,7 @@ class TestConversationLogger:
         logger = ConversationLogger(log_dir=str(tmp_path / "logs"))
         logger.log_session_start(
             "sess-01",
-            Settings(anthropic_api_key="sk-test"),
+            Settings(api_key="sk-test"),
         )
 
         log_path = tmp_path / "logs" / "sess-01.jsonl"
@@ -41,7 +41,7 @@ class TestConversationLogger:
         assert line["type"] == "session_start"
         assert line["thread_id"] == "sess-01"
         assert "settings" in line
-        assert "anthropic_api_key" not in str(line["settings"])
+        assert "api_key" not in str(line["settings"])
 
     def test_logs_turn_with_usage(self, tmp_path):
         logger = ConversationLogger(log_dir=str(tmp_path / "logs"))
@@ -51,7 +51,7 @@ class TestConversationLogger:
 
         logger.log_turn(
             "sess-01", 1, "hello", "hi there", usage,
-            Settings(anthropic_api_key="sk-test"),
+            Settings(api_key="sk-test"),
         )
 
         log_path = tmp_path / "logs" / "sess-01.jsonl"
@@ -69,7 +69,7 @@ class TestConversationLogger:
         logger = ConversationLogger(log_dir=str(tmp_path / "logs"))
         logger.log_session_start(
             "sess-02",
-            Settings(anthropic_api_key="sk-test"),
+            Settings(api_key="sk-test"),
         )
         usage = Usage(input_tokens=500, output_tokens=200)
         logger.log_session_end("sess-02", 10, usage)
@@ -116,11 +116,11 @@ class TestSettingsSerialization:
     def test_settings_dict_excludes_api_key(self):
         from clawagent.conversation_log import _settings_dict
 
-        settings = Settings(anthropic_api_key="secret-key-123")
+        settings = Settings(api_key="secret-key-123")
         serialized = _settings_dict(settings)
 
         assert "model_name" in serialized
-        assert "anthropic_api_key" not in serialized
+        assert "api_key" not in serialized
         assert "secret-key" not in str(serialized)
 
 
