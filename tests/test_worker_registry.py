@@ -75,9 +75,9 @@ class TestAllWorkersRegistered:
 
     def test_four_workers_present(self):
         """导入 worker 包后检查 4 个角色齐全。"""
-        import clawagent.worker.coder  # noqa: F401
-        import clawagent.worker.critic  # noqa: F401
-        import clawagent.worker.researcher  # noqa: F401
+        import clawagent.worker.coder
+        import clawagent.worker.critic
+        import clawagent.worker.researcher
         import clawagent.worker.writer  # noqa: F401
 
         for role in ("coder", "researcher", "critic", "writer"):

@@ -101,7 +101,7 @@ def emit_tool_events(msg_chunk: Any, state: StreamState) -> Iterator[StreamEvent
             continue
         try:
             args = json.loads(acc["args"]) if acc["args"] else {}
-        except json.JSONDecodeError, ValueError:
+        except (json.JSONDecodeError, ValueError):
             args = {"raw": acc["args"]}
         state.tool_calls_emitted.add(tc_id)
         yield StreamEvent(kind="tool_call", node="agent", content=name, metadata={"args": args})

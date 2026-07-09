@@ -3,7 +3,6 @@
 # mypy: disable-error-code="no-untyped-def"
 
 import os
-from typing import Any
 
 import pytest
 

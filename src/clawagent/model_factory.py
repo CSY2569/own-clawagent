@@ -53,7 +53,7 @@ def make_model(settings: Settings) -> Any:
     preset = PLATFORMS.get(settings.platform)
     if preset:
         provider: str | None = preset.model_provider
-        api_base: str = preset.api_base
+        api_base: str = settings.api_base or preset.api_base
     else:
         provider = settings.model_provider or None
         api_base = settings.api_base

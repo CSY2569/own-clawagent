@@ -45,8 +45,8 @@ def worker(worker_config):
 
 @pytest.fixture
 def _mock_deps():
-    """Mock init_chat_model + create_agent to avoid real LLM calls."""
-    with patch("clawagent.worker.base.init_chat_model") as mock_init, patch(
+    """Mock make_model + create_agent to avoid real LLM calls."""
+    with patch("clawagent.worker.base.make_model") as mock_init, patch(
         "clawagent.worker.base.create_agent"
     ) as mock_graph:
         mock_init.return_value = MagicMock()
@@ -66,29 +66,21 @@ class TestSpawn:
         assert isinstance(agent, Agent)
 
     def test_spawn_passes_model_params(self, worker, settings, _mock_deps):
-        """传入 settings 时，API key 使用 settings 中的值（bug17 验证）。
-
-        model/temperature/max_tokens 仍来自 WorkerConfig，只有 api_key
-        通过 settings 回退。这是 Bug 17 当前的设计——Worker 独立配置
-        模型参数，运行时 settings 只提供 api_key 回退。
-        """
         mock_init, _ = _mock_deps
         worker.spawn("task", settings=settings)
 
-        call_kwargs = mock_init.call_args.kwargs
-        assert call_kwargs["api_key"] == "sk-test-fixture"
-        # 模型参数来自 WorkerConfig, 不是 Settings
-        assert call_kwargs["temperature"] == worker.config.temperature
-        assert call_kwargs["max_tokens"] == worker.config.max_tokens
+        worker_settings = mock_init.call_args.args[0]
+        assert worker_settings.api_key == "sk-test-fixture"
+        assert worker_settings.temperature == worker.config.temperature
+        assert worker_settings.max_tokens == worker.config.max_tokens
 
     def test_spawn_fallback_to_env(self, worker, monkeypatch, _mock_deps):
-        """不传 settings 时从环境变量读取。"""
         mock_init, _ = _mock_deps
         monkeypatch.setenv("CLAWAGENT_API_KEY", "sk-env-key")
-        worker.spawn("task")  # 不应抛异常
+        worker.spawn("task")
 
-        call_kwargs = mock_init.call_args.kwargs
-        assert call_kwargs["api_key"] == "sk-env-key"
+        worker_settings = mock_init.call_args.args[0]
+        assert worker_settings.api_key == "sk-env-key"
 
     def test_spawn_creates_separate_db(self, worker, monkeypatch, tmp_path, _mock_deps):
         """每次 spawn 创建独立的 SQLite 数据库文件。"""

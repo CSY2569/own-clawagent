@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from clawagent.worker.factory import WorkerFactory
 from clawagent.worker.base import BaseWorker
+from clawagent.worker.factory import WorkerFactory
 
 
 def _clean_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
