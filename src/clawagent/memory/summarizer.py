@@ -1,5 +1,6 @@
 """Conversation summarization — generate and store session summaries."""
 
+import contextlib
 import sqlite3
 import threading
 from pathlib import Path
@@ -17,6 +18,8 @@ def _get_conn(db_path: str) -> sqlite3.Connection:
     _ensure_table(conn)
     _ensure_messages_table(conn)
     _ensure_preferences_table(conn)
+    _ensure_user_profile_table(conn)
+    _ensure_facts_table(conn)
     return conn
 
 
@@ -77,10 +80,41 @@ def _ensure_preferences_table(conn: sqlite3.Connection) -> None:
             confidence REAL DEFAULT 0.5,
             session_id TEXT,
             evidence TEXT,
+            privacy_level TEXT DEFAULT 'sensitive',
             created_at TEXT DEFAULT (datetime('now'))
         )
     """)
+    with contextlib.suppress(sqlite3.OperationalError):
+        conn.execute("ALTER TABLE preferences ADD COLUMN privacy_level TEXT DEFAULT 'sensitive'")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_preferences_key ON preferences(key)")
+    conn.commit()
+
+
+def _ensure_user_profile_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_profile (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            confidence REAL DEFAULT 0.5,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.commit()
+
+
+def _ensure_facts_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            content TEXT NOT NULL,
+            category TEXT DEFAULT 'general',
+            privacy_level TEXT DEFAULT 'public',
+            confidence REAL DEFAULT 0.7,
+            session_id TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category)")
     conn.commit()
 
 
@@ -237,3 +271,20 @@ def _heuristic_summary(text: str) -> tuple[str, str]:
     first_line = lines[0][:60] if lines and lines[0] else "Conversation"
     word_count = len(text.split())
     return first_line, f"Conversation with {len(lines)} exchanges ({word_count} words total)."
+
+
+def get_recent_summaries(db_path: str, limit: int = 3) -> list[dict[str, Any]]:
+    """Return the N most recently updated session summaries (excluding empty sessions)."""
+    path = Path(db_path)
+    if not path.exists():
+        return []
+    conn = _get_cached_conn(db_path)
+    rows = conn.execute(
+        """SELECT thread_id, title, summary, message_count, updated_at
+           FROM session_summaries
+           WHERE message_count > 0
+           ORDER BY updated_at DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]

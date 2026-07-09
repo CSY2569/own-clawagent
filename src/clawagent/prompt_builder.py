@@ -32,7 +32,7 @@ class PromptBuilder:
         self._prompts_dir = Path(prompts_dir)
         self._memory_db_path = memory_db_path
         self._max_preferences = max_preferences
-        self._pref_cache: list[dict[str, str]] | None = None
+        self._pref_cache: str | None = None
         self._pref_cache_ts: float = 0.0
 
     def build(
@@ -86,16 +86,15 @@ class PromptBuilder:
             f"## Runtime\nCurrent time: {now}\nAgent: {agent_id}\nChannel: {source}"
         )
 
-        # Layer 5: User preferences from SQLite (optional)
-        prefs = self._load_preferences()
-        if prefs:
-            pref_text = "\n".join(f"- {p['key']}: {p['value']}" for p in prefs)
-            layers.append(f"## User Preferences\n{pref_text}")
+        # Layer 5: Long-term memory from SQLite (preferences + profile + recent sessions)
+        memory_text = self._build_long_term_memory()
+        if memory_text:
+            layers.append(memory_text)
 
         # Tools: auto-generated from ALL_TOOLS (always)
         layers.append(self._build_tools_section(delegate_tool))
 
-        # Extra context (optional, e.g. RAG results)
+        # Extra context (optional, e.g. RAG results or semantic memory recall)
         if extra_context:
             layers.append(f"## Additional Context\n{extra_context}")
 
@@ -108,10 +107,10 @@ class PromptBuilder:
             return path.read_text(encoding="utf-8").strip()
         return None
 
-    def _load_preferences(self) -> list[dict[str, str]]:
-        """Load user preferences from SQLite (Layer 5), with TTL cache."""
+    def _build_long_term_memory(self) -> str | None:
+        """Assemble Layer 5: preferences + profile + recent session summaries."""
         if not self._memory_db_path:
-            return []
+            return None
 
         import time
 
@@ -119,12 +118,46 @@ class PromptBuilder:
         if self._pref_cache is not None and (now - self._pref_cache_ts) < self._PREF_CACHE_TTL:
             return self._pref_cache
 
+        sections: list[str] = []
+
         from clawagent.memory.preferences import load_top_preferences
 
         prefs = load_top_preferences(self._memory_db_path, self._max_preferences)
-        self._pref_cache = prefs
+        if prefs:
+            pref_text = "\n".join(f"- {p['key']}: {p['value']}" for p in prefs)
+            sections.append(f"### User Preferences\n{pref_text}")
+
+        try:
+            from clawagent.memory.profile import load_profile
+
+            profile = load_profile(self._memory_db_path)
+            if profile:
+                profile_text = "\n".join(f"- {k}: {v}" for k, v in profile.items())
+                sections.append(f"### User Profile\n{profile_text}")
+        except Exception:
+            pass
+
+        try:
+            from clawagent.memory.summarizer import get_recent_summaries
+
+            recent = get_recent_summaries(self._memory_db_path, limit=3)
+            if recent:
+                lines = []
+                for s in recent:
+                    title = s.get("title", "Untitled")[:50]
+                    summary = s.get("summary", "")[:200]
+                    lines.append(f"- [{s.get('thread_id', '?')}] {title}: {summary}")
+                sections.append("### Recent Sessions\n" + "\n".join(lines))
+        except Exception:
+            pass
+
+        if not sections:
+            return None
+
+        result = "## Long-Term Memory\n" + "\n\n".join(sections)
+        self._pref_cache = result
         self._pref_cache_ts = now
-        return prefs
+        return result
 
     @staticmethod
     def _build_tools_section(delegate_tool: BaseTool | None = None) -> str:

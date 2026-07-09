@@ -249,11 +249,12 @@ class TestStreamEventsPersistence:
         assert msgs[1]["content"] == "Response text."
 
     def test_extracts_preferences(self, agent: Agent, tmp_path: Any) -> None:
+        agent._turn_count = 9
         agent._graph.stream.return_value = [
             (_agent_chunk(content="I like Python."), {"langgraph_node": "agent"}),
         ]
         with patch(
-            "clawagent.memory.preferences.extract_preferences_from_messages"
+            "clawagent.memory.preferences.extract_memories_from_messages"
         ) as mock_extract:
             list(agent.stream_events("I like Python"))
             mock_extract.assert_called_once()

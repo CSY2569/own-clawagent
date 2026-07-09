@@ -78,7 +78,7 @@ class TestExtractFromMessages:
         db = str(tmp_path / "test.db")
         mock_model = MagicMock()
         mock_model.invoke.return_value.content = (
-            '[{"key": "style", "value": "concise", "evidence": "user said so", "confidence": 0.8}]'
+            '{"preferences": [{"key": "style", "value": "concise", "evidence": "user said so", "confidence": 0.8, "privacy_level": "sensitive"}], "profile": [], "facts": []}'
         )
         result = extract_preferences_from_messages("keep it short", "s1", db, mock_model)
         assert len(result) == 1
