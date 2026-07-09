@@ -50,6 +50,9 @@ class Settings:
     max_result_chars: int = 50_000
     platform: str = "deepseek"
     api_base: str = ""
+    memory_privacy_default: str = "public"
+    auto_confirm: bool = False
+    audit_log_path: str = "logs/audit.jsonl"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -80,6 +83,9 @@ class Settings:
             max_result_chars=_get_int_env("CLAWAGENT_MAX_RESULT_CHARS", 50_000),
             platform=os.getenv("CLAWAGENT_PLATFORM", "deepseek"),
             api_base=os.getenv("CLAWAGENT_API_BASE", ""),
+            memory_privacy_default=os.getenv("CLAWAGENT_MEMORY_PRIVACY_DEFAULT", "public"),
+            auto_confirm=os.getenv("CLAWAGENT_AUTO_CONFIRM", "").lower() in ("true", "1", "yes"),
+            audit_log_path=os.getenv("CLAWAGENT_AUDIT_LOG", "logs/audit.jsonl"),
         )
 
 

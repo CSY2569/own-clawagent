@@ -12,5 +12,7 @@ SLASH_COMMANDS: list[tuple[str, str]] = [
     ("/compress", "切换压缩策略（trim / token_trim / summarize）"),
     ("/settings", "显示当前设置"),
     ("/rag-search", "直接搜索 RAG 向量库（不经过 LLM）"),
+    ("/forget", "清除记忆（all/preferences，默认 all）"),
+    ("/permissions", "查看或修改工具权限规则（/permissions allow|deny 工具 匹配）"),
     ("/help", "显示此帮助"),
 ]

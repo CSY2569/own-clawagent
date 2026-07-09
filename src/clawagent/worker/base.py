@@ -5,16 +5,17 @@ from __future__ import annotations
 import importlib
 import logging
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar
 from uuid import uuid4
 
 from langchain.agents import create_agent
-from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.config import Settings
+from clawagent.model_factory import make_model
 from clawagent.prompt_builder import PromptBuilder
 from clawagent.worker.config import _WORKER_TOOL_MAP, WORKER_TOOLS, WorkerConfig
 
@@ -70,6 +71,27 @@ class BaseWorker:
         tool_names = getattr(self, "_TOOLS", None) or WORKER_TOOLS.get(self.config.role, [])
         return _resolve_tools(tool_names)
 
+    def _get_wrapped_tools(self) -> list[Any]:
+        """Return tools wrapped with worker-specific permission restrictions.
+
+        Workers are non-interactive (no REPL), so CONFIRM-level operations
+        are auto-approved for tools the worker is allowed to use.
+        """
+        tools = self._get_tools()
+        try:
+            from clawagent.security import AuditLogger, PermissionConfig, wrap_tools
+
+            perm_config = PermissionConfig.for_worker(self.config.role)
+            audit = AuditLogger()
+            return wrap_tools(
+                tools, perm_config, audit,
+                thread_id=f"worker-{self.config.role}",
+                auto_confirm=True,
+            )
+        except Exception:
+            logger.debug("Worker permission wrapping failed", exc_info=True)
+            return tools
+
     def _customize_prompt(self, prompt: str, task: str, prompts_dir: str = "") -> str:
         """Subclasses may override to inject additional context into the prompt.
 
@@ -123,26 +145,20 @@ class BaseWorker:
         if settings is None:
             settings = Settings.from_env()
 
-        api_key = self.config.api_key
-        if not api_key:
-            api_key = settings.api_key
-
-        kwargs: dict[str, Any] = {
-            "api_key": api_key,
-            "max_tokens": self.config.max_tokens,
-            "temperature": self.config.temperature,
-            "timeout": self.config.request_timeout,
-        }
-        if self.config.api_base:
-            kwargs["base_url"] = self.config.api_base
-
-        model = init_chat_model(
-            model=self.config.model,
-            model_provider=self.config.model_provider or None,
-            **kwargs,
+        worker_settings = replace(
+            settings,
+            model_name=self.config.model or settings.model_name,
+            model_provider=self.config.model_provider or settings.model_provider,
+            api_base=self.config.api_base or settings.api_base,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+            request_timeout=self.config.request_timeout,
         )
+        if self.config.api_key:
+            worker_settings = replace(worker_settings, api_key=self.config.api_key)
 
-        # Wrap with KeyPoolChatModel if a pool is configured for this worker
+        model = make_model(worker_settings)
+
         pool_name = self.config.api_pool or "default"
         pool = get_global_pool()
         pool_stats = pool.get_pool_stats(pool_name)
@@ -162,7 +178,7 @@ class BaseWorker:
 
         graph = create_agent(
             model=model,
-            tools=self._get_tools(),
+            tools=self._get_wrapped_tools(),
             checkpointer=saver,
             system_prompt=sys_prompt,
         )

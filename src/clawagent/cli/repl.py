@@ -16,8 +16,8 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.rule import Rule
 
-from clawagent.agent import Usage
-from clawagent.cli.commands import handle_command
+from clawagent.agent import Usage, set_confirm_fn
+from clawagent.cli.commands import handle_command, make_confirm_fn
 from clawagent.cli.session import SessionContext
 from clawagent.cli.streaming import run_streaming_round
 from clawagent.ui import render_status_line
@@ -94,6 +94,9 @@ def run_repl(ctx: SessionContext) -> None:
     and handles graceful shutdown.
     """
     console = Console()
+
+    set_confirm_fn(make_confirm_fn(console))
+    ctx.agent_ref.agent.reconfigure(ctx.settings)
 
     pt_session: PromptSession[str] = PromptSession(
         history=InMemoryHistory(),

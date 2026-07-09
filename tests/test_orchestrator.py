@@ -4,8 +4,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from clawagent.orchestrator.delegator import make_delegate_task
 from clawagent.worker.factory import WorkerFactory
 
@@ -88,7 +86,7 @@ class TestDelegateWithRuntimeSettings:
         delegate = make_delegate_task(factory)
 
         delegate.invoke({"role": "coder", "task": "test"})
-        call_args, call_kwargs = mock_worker.spawn.call_args
+        _call_args, call_kwargs = mock_worker.spawn.call_args
         assert call_kwargs.get("settings") == "settings_obj"
 
 

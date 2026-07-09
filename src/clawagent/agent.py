@@ -49,6 +49,18 @@ logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
+_confirm_fn: Any | None = None
+
+
+def set_confirm_fn(fn: Any | None) -> None:
+    """Set the interactive confirmation callback for permission-controlled tools.
+
+    Called by the REPL before ``create_agent``. The callback receives
+    (tool_name, args) and returns True to approve, False to deny.
+    """
+    global _confirm_fn
+    _confirm_fn = fn
+
 __all__ = [
     "Agent",
     "AgentResponse",
@@ -151,6 +163,29 @@ def _build_middleware(
     return middleware
 
 
+def _make_secured_tools(
+    delegate_tool: BaseTool | None,
+    memory_tools: list[BaseTool] | None,
+    settings: Settings,
+    thread_id: str = "",
+    confirm_fn: Any = None,
+) -> list[BaseTool]:
+    """Build tool list with permission middleware wrapping."""
+    from clawagent.security import AuditLogger, PermissionConfig, wrap_tools
+
+    raw_tools = _make_all_tools(delegate_tool, memory_tools)
+    perm_config = PermissionConfig()
+    audit = AuditLogger(settings.audit_log_path)
+    return wrap_tools(
+        raw_tools,
+        perm_config,
+        audit,
+        thread_id=thread_id,
+        auto_confirm=settings.auto_confirm,
+        confirm_fn=confirm_fn or _confirm_fn,
+    )
+
+
 def create_agent(
     settings: Settings,
     channel: str = "cli",
@@ -188,7 +223,7 @@ def create_agent(
 
     graph = _create_agent(
         model=model,
-        tools=_make_all_tools(delegate_tool, memory_tools),
+        tools=_make_secured_tools(delegate_tool, memory_tools, settings),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
@@ -218,7 +253,7 @@ def rebuild_graph(
 
     return _create_agent(
         model=model,
-        tools=_make_all_tools(delegate_tool, memory_tools),
+        tools=_make_secured_tools(delegate_tool, memory_tools, settings),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
@@ -285,29 +320,29 @@ class Agent:
             ensure_session_entry(self._db_path, thread_id, user_msg)
 
             self._turn_count += 1
-            if self._turn_count % 5 == 1:
+            if self._turn_count % 10 == 0:
                 import threading
 
                 threading.Thread(
-                    target=self._extract_prefs_async,
+                    target=self._extract_memories_async,
                     args=(thread_id, user_msg, assistant_msg),
                     daemon=True,
                 ).start()
         except Exception:
             logger.exception("Failed to persist turn thread_id=%s", thread_id)
 
-    def _extract_prefs_async(self, thread_id: str, user_msg: str, assistant_msg: str) -> None:
-        """Background preference extraction — must not block user input."""
+    def _extract_memories_async(self, thread_id: str, user_msg: str, assistant_msg: str) -> None:
+        """Background memory extraction - preferences, profile, and facts."""
         try:
-            from clawagent.memory.preferences import extract_preferences_from_messages
+            from clawagent.memory.preferences import extract_memories_from_messages
 
-            extract_preferences_from_messages(
+            extract_memories_from_messages(
                 messages_text=user_msg + "\n" + assistant_msg,
                 session_id=thread_id,
                 db_path=self._db_path,
             )
         except Exception:
-            logger.exception("Preference extraction failed thread_id=%s", thread_id)
+            logger.exception("Memory extraction failed thread_id=%s", thread_id)
 
     def close(self) -> None:
         """Release resources held by this agent, particularly the SQLite connection."""

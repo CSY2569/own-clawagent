@@ -17,6 +17,31 @@ from clawagent.ui import ConversationStats
 type _CmdResult = tuple[Settings, PriceConfig] | None
 
 
+def make_confirm_fn(console: Console) -> Any:
+    """Create a confirmation callback for permission-controlled tools.
+
+    Returns a function that takes (tool_name, args) and returns True
+    if the user approves the operation.
+    """
+
+    def _confirm(tool_name: str, args: dict[str, Any]) -> bool:
+        preview = ""
+        if tool_name == "write_file":
+            preview = f" 路径: {args.get('path', args.get('arg1', '?'))}"
+        elif tool_name == "run_command":
+            preview = f" 命令: {args.get('command', args.get('arg1', '?'))}"
+        console.print(f"[yellow]⚠️  {tool_name} 需要确认[/yellow]")
+        if preview:
+            console.print(f"[dim]{preview}[/dim]")
+        try:
+            choice = console.input("[bold]确认执行？(y/n): [/]").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return choice == "y"
+
+    return _confirm
+
+
 def _cmd_sessions(cmd: str, agent_ref: AgentRef, settings: Settings,
                   console: Console, stats: ConversationStats, pricing: PriceConfig,
                   logger: ConversationLogger) -> _CmdResult:
@@ -315,6 +340,94 @@ def _cmd_help(cmd: str, agent_ref: AgentRef, settings: Settings,
     return None
 
 
+def _cmd_forget(cmd: str, agent_ref: AgentRef, settings: Settings,
+                console: Console, stats: ConversationStats, pricing: PriceConfig,
+                logger: ConversationLogger) -> _CmdResult:
+    """Clear memory: /forget [all|preferences|session]"""
+    scope = cmd[8:].strip() if len(cmd) > 8 else "all"
+    db_path = settings.memory_db_path
+
+    if scope == "all":
+        from clawagent.memory.facts import clear_facts
+        from clawagent.memory.preferences import clear_preferences
+        from clawagent.memory.profile import clear_profile
+        from clawagent.memory.summarizer import close_all_cached
+
+        clear_preferences(db_path)
+        clear_profile(db_path)
+        clear_facts(db_path)
+        console.print("[green]已清除全部长期记忆（偏好、画像、事实）。[/green]")
+        logger.log_settings_change(agent_ref.agent.thread_id, "forget", "all", "")
+        close_all_cached()
+
+    elif scope == "preferences":
+        from clawagent.memory.preferences import clear_preferences
+
+        clear_preferences(db_path)
+        console.print("[green]已清除用户偏好。[/green]")
+
+    else:
+        console.print(
+            "[yellow]用法: /forget all|preferences[/yellow]"
+        )
+
+    return None
+
+
+def _cmd_permissions(cmd: str, agent_ref: AgentRef, settings: Settings,
+                     console: Console, stats: ConversationStats, pricing: PriceConfig,
+                     logger: ConversationLogger) -> _CmdResult:
+    """View or modify permission rules: /permissions [allow|deny tool pattern]"""
+    from clawagent.security.permissions import PermissionConfig, PermissionLevel
+
+    perm_config = PermissionConfig()
+    arg = cmd[13:].strip() if len(cmd) > 13 else ""
+
+    if not arg:
+        table = Table(box=None, padding=(0, 2), title="权限规则")
+        table.add_column("#", style="dim", no_wrap=True)
+        table.add_column("工具", style="cyan")
+        table.add_column("匹配", style="dim")
+        table.add_column("级别")
+        table.add_column("说明")
+        for i, rule in enumerate(perm_config.rules, 1):
+            color = {"allow": "green", "confirm": "yellow", "deny": "red"}.get(
+                rule.level.value, "dim"
+            )
+            table.add_row(
+                str(i), rule.tool_name, rule.pattern,
+                f"[{color}]{rule.level.value}[/{color}]", rule.description,
+            )
+        console.print(table)
+        console.print("[dim]/permissions allow <工具> <匹配>  或  /permissions deny <工具> <匹配>[/dim]")
+        return None
+
+    if arg == "reset":
+        perm_config.reset()
+        console.print("[green]权限规则已恢复默认。[/green]")
+        return None
+
+    parts = arg.split(maxsplit=2)
+    if len(parts) < 3:
+        console.print("[yellow]用法: /permissions allow|deny <工具> <匹配>[/yellow]")
+        return None
+
+    level_str, tool, pattern = parts[0], parts[1], parts[2]
+    try:
+        level = PermissionLevel(level_str)
+    except ValueError:
+        console.print(f"[red]无效级别 '{level_str}'。可选: allow, confirm, deny[/red]")
+        return settings, pricing
+
+    perm_config.add_rule(tool, pattern, level, "")
+    console.print(
+        f"[green]已添加规则: {tool} {pattern} -> {level_str}[/green]\n"
+        "[dim]注意: 规则仅当前会话有效，重启后恢复默认。"
+        "如需持久化，请在 .env 中配置。[/dim]"
+    )
+    return None
+
+
 # ── Registry ───────────────────────────────────────────────────────
 _CMD_EXACT: dict[str, Any] = {
     "/sessions": _cmd_sessions,
@@ -325,6 +438,8 @@ _CMD_EXACT: dict[str, Any] = {
     "/model": _cmd_model,
     "/models": _cmd_models,
     "/platform": _cmd_platform,
+    "/forget": _cmd_forget,
+    "/permissions": _cmd_permissions,
 }
 _CMD_PREFIX: list[tuple[str, Any]] = [
     ("/load ", _cmd_load),
