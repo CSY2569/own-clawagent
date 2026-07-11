@@ -67,41 +67,6 @@ class TestLayerRuntime:
         assert "UTC" in prompt
 
 
-class TestToolSection:
-    """Auto-generated tools section."""
-
-    def test_lists_core_tools(self, tmp_path):
-        agent_dir = tmp_path / "agents" / "wenbao"
-        agent_dir.mkdir(parents=True)
-        (agent_dir / "identity.md").write_text("Identity")
-
-        builder = PromptBuilder(prompts_dir=tmp_path)
-        prompt = builder.build(agent_id="wenbao")
-
-        assert "Available Tools" in prompt
-        assert "read_file" in prompt
-        assert "write_file" in prompt
-        assert "run_command" in prompt
-        assert "search_documents" in prompt
-
-    def test_includes_delegate_tool(self, tmp_path):
-        from unittest.mock import MagicMock
-
-        agent_dir = tmp_path / "agents" / "wenbao"
-        agent_dir.mkdir(parents=True)
-        (agent_dir / "identity.md").write_text("Identity")
-
-        mock_tool = MagicMock()
-        mock_tool.name = "delegate_task"
-        mock_tool.description = "Delegate a task to a worker"
-
-        builder = PromptBuilder(prompts_dir=tmp_path)
-        prompt = builder.build(agent_id="wenbao", delegate_tool=mock_tool)
-
-        assert "delegate_task" in prompt
-        assert "Delegate a task" in prompt
-
-
 class TestWorkerSource:
     """Worker source excludes agent roster."""
 

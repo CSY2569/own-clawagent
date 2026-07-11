@@ -1,25 +1,19 @@
 """Multi-layer system prompt builder.
 
 Assembles the agent system prompt from layered sources:
-markdown files on disk, runtime metadata, SQLite user preferences,
-and auto-generated tool descriptions.
+markdown files on disk, runtime metadata, and SQLite long-term memory.
+Tool definitions are sent via the API's tools parameter, not duplicated here.
 """
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
-from langchain_core.tools import BaseTool
+logger = logging.getLogger(__name__)
 
 
 class PromptBuilder:
-    """Build a system prompt by layering multiple sources.
-
-    Args:
-        prompts_dir: Root directory containing prompts/agent/ and prompts/shared/.
-        memory_db_path: Path to SQLite database for user preferences (Layer 5).
-        max_preferences: Max number of user preferences to inject.
-    """
+    """Build a system prompt by layering multiple sources."""
 
     _PREF_CACHE_TTL: float = 60.0
 
@@ -40,7 +34,6 @@ class PromptBuilder:
         agent_id: str = "wenbao",
         source: str = "cli",
         extra_context: str | None = None,
-        delegate_tool: BaseTool | None = None,
     ) -> str:
         """Assemble the full system prompt from all layers."""
         layers: list[str] = []
@@ -62,7 +55,6 @@ class PromptBuilder:
         if bootstrap:
             context_parts.append(bootstrap)
 
-        # Workers don't need the agent roster (they can't delegate_task)
         if source != "worker":
             agents_md = self._read("shared/agents.md")
             if agents_md:
@@ -72,7 +64,6 @@ class PromptBuilder:
         if search_rules:
             context_parts.append(search_rules)
 
-        # Role-specific context for workers (e.g. shared/worker-coder.md)
         worker_ctx = self._read(f"shared/worker-{agent_id}.md")
         if worker_ctx:
             context_parts.append(worker_ctx)
@@ -91,10 +82,7 @@ class PromptBuilder:
         if memory_text:
             layers.append(memory_text)
 
-        # Tools: auto-generated from ALL_TOOLS (always)
-        layers.append(self._build_tools_section(delegate_tool))
-
-        # Extra context (optional, e.g. RAG results or semantic memory recall)
+        # Extra context (optional, e.g. RAG results)
         if extra_context:
             layers.append(f"## Additional Context\n{extra_context}")
 
@@ -135,21 +123,21 @@ class PromptBuilder:
                 profile_text = "\n".join(f"- {k}: {v}" for k, v in profile.items())
                 sections.append(f"### User Profile\n{profile_text}")
         except Exception:
-            pass
+            logger.debug("Failed to load user profile", exc_info=True)
 
         try:
             from clawagent.memory.summarizer import get_recent_summaries
 
-            recent = get_recent_summaries(self._memory_db_path, limit=3)
+            recent = get_recent_summaries(self._memory_db_path, limit=2)
             if recent:
                 lines = []
                 for s in recent:
                     title = s.get("title", "Untitled")[:50]
-                    summary = s.get("summary", "")[:200]
+                    summary = s.get("summary", "")[:100]
                     lines.append(f"- [{s.get('thread_id', '?')}] {title}: {summary}")
                 sections.append("### Recent Sessions\n" + "\n".join(lines))
         except Exception:
-            pass
+            logger.debug("Failed to load recent summaries", exc_info=True)
 
         if not sections:
             return None
@@ -158,27 +146,3 @@ class PromptBuilder:
         self._pref_cache = result
         self._pref_cache_ts = now
         return result
-
-    @staticmethod
-    def _build_tools_section(delegate_tool: BaseTool | None = None) -> str:
-        """Auto-generate the tools listing from ALL_TOOLS + optional delegate_task.
-
-        Each @tool-decorated function has .name and .description,
-        so the list stays accurate as tools are added or removed.
-        """
-        from clawagent.tools import ALL_TOOLS  # lazy import, avoids circular deps
-
-        tools: list[Any] = [*ALL_TOOLS]
-        if delegate_tool is not None:
-            tools.append(delegate_tool)
-
-        lines = ["## Available Tools"]
-        for t in tools:
-            name = getattr(t, "name", str(t))
-            desc = getattr(t, "description", "")
-            desc_short = desc.split("\n")[0] if desc else ""
-            if desc_short:
-                lines.append(f"{name} — {desc_short}")
-            else:
-                lines.append(name)
-        return "\n".join(lines)

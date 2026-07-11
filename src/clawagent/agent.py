@@ -80,7 +80,6 @@ def _ensure_memory_dir(path: str) -> str:
 def _make_sys_prompt(
     settings: Settings,
     memory_db_path: str,
-    delegate_tool: BaseTool | None = None,
     channel: str = "cli",
 ) -> str:
     """Build the system prompt from layered prompt files and preferences."""
@@ -100,7 +99,6 @@ def _make_sys_prompt(
     ).build(
         agent_id=settings.agent_id,
         source=channel,
-        delegate_tool=delegate_tool,
         extra_context=extra,
     )
 
@@ -212,7 +210,7 @@ def create_agent(
     delegate_tool = make_delegate_task(factory)
 
     db_path = _ensure_memory_dir(settings.memory_db_path)
-    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool, channel=channel)
+    sys_prompt = _make_sys_prompt(settings, db_path, channel=channel)
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
 
@@ -244,7 +242,7 @@ def rebuild_graph(
     without losing conversation state stored in the checkpointer.
     """
     model = _make_model(settings)
-    sys_prompt = _make_sys_prompt(settings, db_path, delegate_tool, channel=channel)
+    sys_prompt = _make_sys_prompt(settings, db_path, channel=channel)
 
     memory_tools = create_memory_tools(db_path, model)
 
