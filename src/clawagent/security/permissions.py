@@ -65,7 +65,6 @@ _DEFAULT_RULES: list[PermissionRule] = [
     PermissionRule("list_sessions", "*", PermissionLevel.ALLOW, "会话列表自动允许"),
     PermissionRule("recall_session", "*", PermissionLevel.ALLOW, "会话回顾自动允许"),
     PermissionRule("summarize_session", "*", PermissionLevel.ALLOW, "会话摘要自动允许"),
-    PermissionRule("forget", "*", PermissionLevel.ALLOW, "清除记忆自动允许"),
 ]
 
 _WORKER_RESTRICTIONS: dict[str, list[PermissionRule]] = {

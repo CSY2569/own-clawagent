@@ -58,7 +58,7 @@ class AuditLogger:
             rotated = self._path.with_name(f"audit.{date_str}.jsonl")
             os.rename(self._path, rotated)
         except Exception:
-            pass
+            logger.warning("Audit log rotation failed", exc_info=True)
 
 
 def _sanitize_args(args: dict[str, Any]) -> dict[str, Any]:
