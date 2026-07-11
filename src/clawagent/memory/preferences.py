@@ -9,12 +9,15 @@ Each item carries a privacy_level that controls storage and vectorization.
 """
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from clawagent.memory.privacy import normalize_level
 from clawagent.memory.summarizer import _get_cached_conn
+
+logger = logging.getLogger(__name__)
 
 
 def save_preference(
@@ -178,5 +181,5 @@ def _extract_llm(text: str, model: Any) -> dict[str, list[dict[str, Any]]]:
                 "facts": parsed.get("facts", []) if isinstance(parsed.get("facts"), list) else [],
             }
     except Exception:
-        pass
+        logger.debug("Memory extraction JSON parse failed", exc_info=True)
     return {"preferences": [], "profile": [], "facts": []}
