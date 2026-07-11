@@ -52,6 +52,9 @@ venv/
 .omo/
 blog/
 
+# Personal agent prompts (not for public repo)
+prompts/agents/xiaokan/
+
 # iLink WeChat credentials
 ilink_creds.json
 ilink_creds.json.sync
