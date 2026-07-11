@@ -22,13 +22,10 @@ def wrap_tool_with_permission(
     confirm_fn: Callable[[str, dict[str, Any]], bool] | None = None,
 ) -> BaseTool:
     """Wrap a tool so every invocation goes through permission check + audit."""
-    original_func: Any = getattr(tool, "func", None)
-    if original_func is None:
-        return copy.copy(tool)
     tool_name = tool.name
 
-    @functools.wraps(original_func)
-    def checked_func(*args: Any, **kwargs: Any) -> Any:
+    def _check(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
+        """Run permission check; returns denial message or None if allowed."""
         merged_args = _merge_args(args, kwargs)
         rule = perm_config.match(tool_name, merged_args)
 
@@ -45,17 +42,45 @@ def wrap_tool_with_permission(
                 return "用户拒绝操作"
 
         audit.log(thread_id, tool_name, merged_args, rule.level.value, "approved")
-        return original_func(*args, **kwargs)
+        return None
 
-    if isinstance(tool, StructuredTool):
-        return StructuredTool(
-            name=tool.name,
-            description=tool.description,
-            func=checked_func,
-            args_schema=tool.args_schema,
+    # Path 1: StructuredTool with func attribute (most common, via @tool decorator)
+    original_func: Any = getattr(tool, "func", None)
+    if original_func is not None:
+        @functools.wraps(original_func)
+        def checked_func(*args: Any, **kwargs: Any) -> Any:
+            denial = _check(args, kwargs)
+            if denial is not None:
+                return denial
+            return original_func(*args, **kwargs)
+
+        if isinstance(tool, StructuredTool):
+            return StructuredTool(
+                name=tool.name,
+                description=tool.description,
+                func=checked_func,
+                args_schema=tool.args_schema,
+            )
+        new_tool = copy.copy(tool)
+        new_tool.func = checked_func
+        return new_tool
+
+    # Path 2: BaseTool subclass without func - wrap _run method
+    original_run: Any = getattr(tool, "_run", None)
+    if original_run is None:
+        raise ValueError(
+            f"Tool {tool_name!r} has neither 'func' nor '_run'; cannot wrap with permission"
         )
+
+    @functools.wraps(original_run)
+    def checked_run(*args: Any, **kwargs: Any) -> Any:
+        denial = _check(args, kwargs)
+        if denial is not None:
+            return denial
+        return original_run(*args, **kwargs)
+
     new_tool = copy.copy(tool)
-    new_tool.func = checked_func
+    new_tool._run = checked_run  # type: ignore[method-assign]
     return new_tool
 
 

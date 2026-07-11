@@ -89,8 +89,8 @@ class BaseWorker:
                 auto_confirm=True,
             )
         except Exception:
-            logger.debug("Worker permission wrapping failed", exc_info=True)
-            return tools
+            logger.warning("Worker permission wrapping failed, disabling all tools", exc_info=True)
+            return []
 
     def _customize_prompt(self, prompt: str, task: str, prompts_dir: str = "") -> str:
         """Subclasses may override to inject additional context into the prompt.
