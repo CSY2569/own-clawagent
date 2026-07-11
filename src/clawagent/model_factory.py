@@ -12,12 +12,12 @@ from clawagent.api_pool import KeyPoolChatModel, get_global_pool
 from clawagent.config import Settings
 from clawagent.platforms import PLATFORMS
 
+# Dynamic fallback: maps model_provider -> env var name.
+# Multiple platforms share model_provider="openai"; the "openai" platform
+# entry must come last in PLATFORMS to yield the canonical OPENAI_API_KEY.
 _PROVIDER_KEY_ENV: dict[str, str] = {
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openai": "OPENAI_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "ark": "ARK_API_KEY",
-    "opencode-go": "OPENCODE_GO_API_KEY",
+    preset.model_provider: preset.api_key_env
+    for preset in PLATFORMS.values()
 }
 
 
