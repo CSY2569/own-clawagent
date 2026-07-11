@@ -343,8 +343,8 @@ def _cmd_help(cmd: str, agent_ref: AgentRef, settings: Settings,
 def _cmd_forget(cmd: str, agent_ref: AgentRef, settings: Settings,
                 console: Console, stats: ConversationStats, pricing: PriceConfig,
                 logger: ConversationLogger) -> _CmdResult:
-    """Clear memory: /forget [all|preferences|session]"""
-    scope = cmd[8:].strip() if len(cmd) > 8 else "all"
+    """Clear memory: /forget [all|preferences]"""
+    scope = cmd[8:].strip() if len(cmd) > 8 else ""
     db_path = settings.memory_db_path
 
     if scope == "all":
@@ -370,7 +370,6 @@ def _cmd_forget(cmd: str, agent_ref: AgentRef, settings: Settings,
         console.print(
             "[yellow]用法: /forget all|preferences[/yellow]"
         )
-
     return None
 
 

@@ -107,11 +107,18 @@ def load_worker_configs() -> dict[str, WorkerConfig]:
                     break
 
     if not roles:
-        logger.warning(
-            "No WORKER_*_MODEL env vars found. Falling back to built-in roles: %s. "
-            "Set WORKER_COMMON_MODEL and WORKER_COMMON_MODEL_PROVIDER to configure.",
-            list(BUILTIN_WORKER_ROLES),
-        )
+        if not _env("WORKER_COMMON_MODEL"):
+            logger.warning(
+                "No WORKER_*_MODEL env vars found. Falling back to built-in roles: %s. "
+                "Set WORKER_COMMON_MODEL and WORKER_COMMON_MODEL_PROVIDER to configure.",
+                list(BUILTIN_WORKER_ROLES),
+            )
+        else:
+            logger.info(
+                "Using built-in roles %s with WORKER_COMMON_MODEL fallback. "
+                "Set WORKER_{ROLE}_MODEL for per-role overrides.",
+                list(BUILTIN_WORKER_ROLES),
+            )
         roles = set(BUILTIN_WORKER_ROLES)
 
     configs: dict[str, WorkerConfig] = {}
