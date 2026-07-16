@@ -216,12 +216,16 @@ def create_agent(
 
     memory_tools = create_memory_tools(db_path, model)
 
+    from clawagent.tools.browser import create_browser_tools
+
+    browser_tools, _browser_cleanup = create_browser_tools()
+
     compression_config = _make_compression_config(settings)
     middleware = _build_middleware(compression_config, model, settings)
 
     graph = _create_agent(
         model=model,
-        tools=_make_secured_tools(delegate_tool, memory_tools, settings),
+        tools=_make_secured_tools(delegate_tool, memory_tools + browser_tools, settings),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
@@ -246,12 +250,16 @@ def rebuild_graph(
 
     memory_tools = create_memory_tools(db_path, model)
 
+    from clawagent.tools.browser import create_browser_tools
+
+    browser_tools, _ = create_browser_tools()
+
     compression_config = _make_compression_config(settings)
     middleware = _build_middleware(compression_config, model, settings)
 
     return _create_agent(
         model=model,
-        tools=_make_secured_tools(delegate_tool, memory_tools, settings),
+        tools=_make_secured_tools(delegate_tool, memory_tools + browser_tools, settings),
         checkpointer=SqliteSaver(conn),
         system_prompt=sys_prompt,
         middleware=middleware,
@@ -345,6 +353,7 @@ class Agent:
     def close(self) -> None:
         """Release resources held by this agent, particularly the SQLite connection."""
         from clawagent.memory.summarizer import close_all_cached
+        from clawagent.tools.browser import close_browser
 
         if self._conn:
             try:
@@ -356,6 +365,10 @@ class Agent:
             close_all_cached()
         except Exception:
             logger.exception("Failed to close cached connections")
+        try:
+            close_browser()
+        except Exception:
+            logger.exception("Failed to close browser")
 
     def run(self, message: str, thread_id: str | None = None) -> AgentResponse:
         """Run the agent synchronously and return the response with usage."""

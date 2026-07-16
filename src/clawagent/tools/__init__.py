@@ -6,6 +6,7 @@ from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 
+from clawagent.tools.browser import browser_extract_standalone, browser_navigate_standalone
 from clawagent.tools.rag_tool import configure_hybrid_search, search_documents
 from clawagent.tools.web_search import web_search
 
@@ -13,6 +14,8 @@ __all__ = [
     "ALL_TOOLS",
     "PROJECT_ROOT",
     "_resolve_path",
+    "browser_extract_standalone",
+    "browser_navigate_standalone",
     "configure_hybrid_search",
     "create_memory_tools",
     "read_file",

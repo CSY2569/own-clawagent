@@ -37,7 +37,10 @@ class TestResearcherWorker:
     def test_tools(self):
         w = ResearcherWorker(_make_config("researcher"))
         names = {t.name for t in w._get_tools()}
-        assert names == {"search_documents", "web_search"}
+        assert names == {
+            "search_documents", "web_search",
+            "browser_navigate_standalone", "browser_extract_standalone",
+        }
 
     def test_no_write_tools(self):
         """Researcher 没有写文件或执行命令的工具。"""

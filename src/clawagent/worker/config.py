@@ -66,13 +66,15 @@ _WORKER_TOOL_MAP: dict[str, str] = {
     "run_command": "clawagent.tools",
     "search_documents": "clawagent.tools",
     "web_search": "clawagent.tools.web_search",
+    "browser_navigate_standalone": "clawagent.tools.browser",
+    "browser_extract_standalone": "clawagent.tools.browser",
 }
 
 WORKER_TOOLS: dict[str, list[str]] = {
     "coder": ["read_file", "write_file", "run_command"],
     "critic": ["read_file", "search_documents"],
     "writer": ["read_file", "write_file"],
-    "researcher": ["search_documents", "web_search"],
+    "researcher": ["search_documents", "web_search", "browser_navigate_standalone", "browser_extract_standalone"],
 }
 
 

@@ -33,6 +33,8 @@ def _extract_pattern(tool_name: str, args: dict[str, Any]) -> str:
     if tool_name == "run_command":
         cmd = str(args.get("command", args.get("arg1", "")))
         return cmd.split()[0] if cmd else ""
+    if tool_name in ("browser_navigate", "browser_navigate_standalone"):
+        return str(args.get("url", args.get("arg1", "")))
     return "*"
 
 
@@ -65,6 +67,13 @@ _DEFAULT_RULES: list[PermissionRule] = [
     PermissionRule("list_sessions", "*", PermissionLevel.ALLOW, "会话列表自动允许"),
     PermissionRule("recall_session", "*", PermissionLevel.ALLOW, "会话回顾自动允许"),
     PermissionRule("summarize_session", "*", PermissionLevel.ALLOW, "会话摘要自动允许"),
+    PermissionRule("browser_navigate", "*", PermissionLevel.ALLOW, "浏览器导航自动允许"),
+    PermissionRule("browser_click", "*", PermissionLevel.ALLOW, "浏览器点击自动允许"),
+    PermissionRule("browser_extract", "*", PermissionLevel.ALLOW, "浏览器提取自动允许"),
+    PermissionRule("browser_fill", "*", PermissionLevel.ALLOW, "浏览器填充自动允许"),
+    PermissionRule("browser_screenshot", "*", PermissionLevel.ALLOW, "浏览器截图自动允许"),
+    PermissionRule("browser_navigate_standalone", "*", PermissionLevel.ALLOW, "浏览器导航自动允许"),
+    PermissionRule("browser_extract_standalone", "*", PermissionLevel.ALLOW, "浏览器提取自动允许"),
 ]
 
 _WORKER_RESTRICTIONS: dict[str, list[PermissionRule]] = {

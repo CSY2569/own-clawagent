@@ -18,4 +18,7 @@ class ResearcherWorker(BaseWorker):
     with automatic full-text extraction of top results.
     """
 
-    _TOOLS: ClassVar[list[str]] = ["search_documents", "web_search"]
+    _TOOLS: ClassVar[list[str]] = [
+        "search_documents", "web_search",
+        "browser_navigate_standalone", "browser_extract_standalone",
+    ]
